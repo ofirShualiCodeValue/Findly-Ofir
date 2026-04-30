@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { WhereOptions, Op } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
@@ -16,7 +16,7 @@ const paginator = new Paginator(50);
  *   get:
  *     tags: [Employer Notifications]
  *     summary: System notifications received by the current employer (e.g. shift cancelled, application updates)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: query
  *         name: unread
@@ -65,7 +65,7 @@ router.get(
  *   post:
  *     tags: [Employer Notifications]
  *     summary: Mark a notification as read
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: id

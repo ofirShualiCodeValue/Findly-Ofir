@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+﻿import { randomUUID } from 'node:crypto';
 import { Router, Request, Response } from 'express';
 import { fn, col } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
@@ -16,7 +16,7 @@ const router = Router({ mergeParams: true });
  *   post:
  *     tags: [Employer Event Notifications]
  *     summary: Send a message to all approved employees of the event
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: eventId
@@ -117,7 +117,7 @@ interface MessageGroupRow {
  *   get:
  *     tags: [Employer Event Notifications]
  *     summary: History of messages sent for an event (one entry per send)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: eventId

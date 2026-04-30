@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { WhereOptions } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
@@ -59,7 +59,7 @@ function assertPositive(value: unknown, field: string): void {
  *   post:
  *     tags: [Employer Events]
  *     summary: Create a new event owned by the current employer
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     requestBody:
  *       required: true
  *       content:
@@ -138,7 +138,7 @@ router.post(
  *   get:
  *     tags: [Employer Events]
  *     summary: List events owned by the current employer (paginated, newest first)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: query
  *         name: page
@@ -196,7 +196,7 @@ router.get(
  *   get:
  *     tags: [Employer Events]
  *     summary: Get a single event by id (must be owned by current employer)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: id
@@ -229,7 +229,7 @@ router.get(
  *   patch:
  *     tags: [Employer Events]
  *     summary: Partially update an owned event (cannot edit cancelled events)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: id
@@ -319,8 +319,8 @@ router.patch(
  * /v1/employer/events/{id}:
  *   delete:
  *     tags: [Employer Events]
- *     summary: Cancel an event (soft — sets status to 'cancelled', does not remove the row)
- *     security: [{ DevAuth: [] }]
+ *     summary: Cancel an event (soft ג€” sets status to 'cancelled', does not remove the row)
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: id

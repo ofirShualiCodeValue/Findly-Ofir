@@ -185,4 +185,33 @@ docker build --build-arg GITHUB_TOKEN=$GITHUB_TOKEN -t findly-server .
 
 For the full interactive API reference start the server and open **http://localhost:3000/docs/** (Swagger UI). The OpenAPI 3.0.3 spec is also available as JSON at `/docs.json`.
 
+### Authenticating in Swagger UI
+
+Almost every endpoint requires a JWT (Bearer token). To get one and test protected endpoints:
+
+1. Open **http://localhost:3000/docs/**
+2. Find **`POST /v1/shared/auth/sms/request`** (under the `Authentication` tag), click **Try it out**, fill in:
+   ```json
+   {
+     "phone": "0536298799",
+     "role": "employer",
+     "full_name": "אופיר שועלי"
+   }
+   ```
+   Click **Execute**. The response includes `dev_code` (only in development).
+3. Find **`POST /v1/shared/auth/sms/verify`**, click **Try it out**, fill in:
+   ```json
+   {
+     "phone": "0536298799",
+     "code": "<the dev_code from step 2>"
+   }
+   ```
+   Click **Execute**. The response includes `token`.
+4. Copy the `token` value (the long JWT string).
+5. Click the **Authorize** button at the top right of the Swagger UI.
+6. Paste the token into the `BearerAuth` field — **without** the word "Bearer". Click **Authorize**, then **Close**.
+7. Now any protected endpoint (events, profile, applications, etc.) will automatically include the `Authorization: Bearer <token>` header. Try `GET /v1/employer/profile` to verify.
+
+> **Note:** the OTP rotates after every successful login. If you log in once, the next request will return a new `dev_code` — always use the latest one.
+
 Internal phase-by-phase progress is tracked in `STATUS.md` (gitignored — local only).

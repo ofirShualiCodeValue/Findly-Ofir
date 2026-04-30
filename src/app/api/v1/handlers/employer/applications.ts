@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { WhereOptions } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
@@ -30,7 +30,7 @@ const EMPLOYER_DECISIONS: ReadonlySet<EventApplicationStatus> = new Set([
  *   get:
  *     tags: [Employer Applications]
  *     summary: List applicants for an owned event (paginated)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: eventId
@@ -93,7 +93,7 @@ router.get(
  *   patch:
  *     tags: [Employer Applications]
  *     summary: Approve, reject, or cancel an application
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: eventId

@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
 import { SMSOTPCredentialSet } from '../../../../models/authentication/SMSOTPCredentialSet';
@@ -207,8 +207,8 @@ router.post(
  * /v1/shared/auth/logout:
  *   post:
  *     tags: [Authentication]
- *     summary: Client-side logout (JWT is stateless — clients should drop the token)
- *     security: [{ DevAuth: [] }]
+ *     summary: Client-side logout (JWT is stateless ג€” clients should drop the token)
+ *     security: [{ BearerAuth: [] }]
  *     responses:
  *       200:
  *         description: Acknowledged
@@ -231,7 +231,7 @@ if (config.env === 'development') {
         where: { ownerType: OWNER_TYPE, sid: phone },
       });
       if (!creds || !creds.token) {
-        throw new APIError(404, 'No active OTP found — call /sms/request first');
+        throw new APIError(404, 'No active OTP found ג€” call /sms/request first');
       }
       const code = creds.generateOtp();
       res.json({ code: 200, message: 'ok', data: { phone, code } });

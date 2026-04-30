@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { Op, WhereOptions } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
@@ -16,7 +16,7 @@ const paginator = new Paginator(20);
  *   get:
  *     tags: [Employee Events]
  *     summary: Browse open events the employee can apply to
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: query
  *         name: area_id
@@ -26,7 +26,7 @@ const paginator = new Paginator(20);
  *         schema: { type: integer }
  *       - in: query
  *         name: from
- *         description: ISO date — only events starting after this point
+ *         description: ISO date ג€” only events starting after this point
  *         schema: { type: string, format: date-time }
  *       - in: query
  *         name: page
@@ -79,7 +79,7 @@ router.get(
  *   get:
  *     tags: [Employee Events]
  *     summary: View a single open event
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: id

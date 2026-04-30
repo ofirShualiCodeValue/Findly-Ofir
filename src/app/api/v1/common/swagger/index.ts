@@ -1,4 +1,4 @@
-import path from 'path';
+﻿import path from 'path';
 import swaggerJSDoc from 'swagger-jsdoc';
 import config from '../../../../../../config';
 
@@ -9,7 +9,7 @@ const options: swaggerJSDoc.Options = {
       title: 'Findly Server API',
       version: '0.1.0',
       description:
-        'Backend for the Findly platform — employer and employee apps. ' +
+        'Backend for the Findly platform ג€” employer and employee apps. ' +
         'Authentication is currently a dev-only X-User-Id header; will be replaced with JWT in phase 5.',
     },
     servers: [
@@ -26,11 +26,13 @@ const options: swaggerJSDoc.Options = {
     ],
     components: {
       securitySchemes: {
-        DevAuth: {
-          type: 'apiKey',
-          in: 'header',
-          name: 'X-User-Id',
-          description: 'Dev-only — pass the user id directly. Replaced with JWT in phase 5.',
+        BearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description:
+            'JWT obtained from POST /v1/shared/auth/sms/verify. ' +
+            'Click the "Authorize" button at the top right and paste only the token value (without the word "Bearer").',
         },
       },
       schemas: {
@@ -242,7 +244,7 @@ const options: swaggerJSDoc.Options = {
         },
       },
     },
-    security: [{ DevAuth: [] }],
+    security: [{ BearerAuth: [] }],
   },
   apis: [
     path.join(__dirname, '..', '..', 'handlers', '**', '*.ts'),

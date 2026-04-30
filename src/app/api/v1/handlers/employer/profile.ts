@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { Model, ModelStatic, Transaction } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
@@ -31,7 +31,7 @@ async function loadFullProfile(req: Request): Promise<User> {
  *   get:
  *     tags: [Employer Profile]
  *     summary: Get current employer's full profile
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     responses:
  *       200:
  *         description: Full profile with business info, service areas, and event categories
@@ -60,7 +60,7 @@ router.get(
  *   patch:
  *     tags: [Employer Profile]
  *     summary: Update profile fields (User and EmployerProfile combined)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     requestBody:
  *       required: true
  *       content:
@@ -173,7 +173,7 @@ async function syncJunction<T extends Model>(
  *   put:
  *     tags: [Employer Profile]
  *     summary: Replace the employer's service areas (m:n sync)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     requestBody:
  *       required: true
  *       content:
@@ -227,7 +227,7 @@ router.put(
  *   put:
  *     tags: [Employer Profile]
  *     summary: Replace the employer's event categories (m:n sync)
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     requestBody:
  *       required: true
  *       content:
@@ -281,7 +281,7 @@ router.put(
  *     description: |
  *       Accepts JPEG/PNG/WebP up to 2 MB. Stores in local filesystem (MVP).
  *       Production should use S3 presigned uploads.
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     requestBody:
  *       required: true
  *       content:

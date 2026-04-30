@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
 import { ActivityArea } from '../../../../models/ActivityArea';
@@ -12,7 +12,7 @@ const router = Router();
  *   get:
  *     tags: [Employer Taxonomies]
  *     summary: List active activity (service) areas
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     responses:
  *       200:
  *         description: Array of areas

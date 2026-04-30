@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { WhereOptions } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
@@ -17,7 +17,7 @@ const paginator = new Paginator(50);
  *   post:
  *     tags: [Employee Applications]
  *     summary: Apply to an event with a proposed amount
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: eventId
@@ -93,7 +93,7 @@ router.post(
  *   get:
  *     tags: [Employee Applications]
  *     summary: List the employee's own applications
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: query
  *         name: status
@@ -130,7 +130,7 @@ router.get(
  *   delete:
  *     tags: [Employee Applications]
  *     summary: Cancel my own application
- *     security: [{ DevAuth: [] }]
+ *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
  *         name: id
