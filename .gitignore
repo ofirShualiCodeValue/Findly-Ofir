@@ -11,6 +11,8 @@ npm-debug.log*
 src/lib/keys/staging/
 src/lib/keys/production/
 uploads/
+
+STATUS.md
 src/tmp/
 
 .DS_Store

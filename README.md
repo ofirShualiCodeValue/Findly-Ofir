@@ -181,50 +181,8 @@ docker build --build-arg GITHUB_TOKEN=$GITHUB_TOKEN -t findly-server .
 
 ---
 
-## Status
+## API surface
 
-- [x] **Phase 1** — infrastructure (Docker, TypeScript, package.json, .corerc, .sequelizerc)
-- [x] **Phase 2** — bootstrap (Express app, error handler from core, DB+Redis init, CORS, `/health`)
-- [x] **Phase 3** — domain models — 11 models + 14 migrations (`User`, `EmployerProfile`, `EmployeeProfile`, `Event`, `EventCategory`, `ActivityArea`, `EventApplication`, `Notification`, `PushDevice`, m:n junctions)
-- [x] **Phase 4** — Employer API — **14 paths, 18 operations** + Swagger UI
-  - Profile (`GET`/`PATCH` + activity-areas/event-categories sync + logo upload)
-  - Events CRUD (with soft-cancel via status)
-  - Event applications (list applicants with `proposed_amount`, approve/reject/cancel)
-  - Event-scoped notifications (batch send by `message_group_id`, aggregated history)
-  - Inbox notifications (system events for employer + mark-as-read)
-  - Reference taxonomies (categories, areas)
-- [ ] **Phase 5** — Real auth flow — replace dev `X-User-Id` middleware with SMS OTP via `nodejs-core/authentication` (Twilio gateway)
-- [ ] **Phase 6** — Employee app handlers (browse events, apply with `proposed_amount`, list own applications, cancel) + Push notifications (FCM/APNs)
-- [ ] **Phase 7** — Migrate logo upload from local FS → S3 presigned URLs (nodejs-core supports `services/aws/s3/PresignedUrl`)
-- [ ] **Phase 8** — Switch Dockerfile `GITHUB_TOKEN` from build ARG → BuildKit secret for production builds
+For the full interactive API reference start the server and open **http://localhost:3000/docs/** (Swagger UI). The OpenAPI 3.0.3 spec is also available as JSON at `/docs.json`.
 
-### Live API surface (Phase 4 completed)
-
-```
-GET    /health
-GET    /docs/                                                 ← Swagger UI
-GET    /docs.json                                             ← OpenAPI 3.0.3 spec
-
-GET    /v1/employer/profile
-PATCH  /v1/employer/profile
-POST   /v1/employer/profile/logo                              ← multipart, JPEG/PNG/WebP, ≤2MB
-PUT    /v1/employer/profile/activity-areas
-PUT    /v1/employer/profile/event-categories
-
-POST   /v1/employer/events
-GET    /v1/employer/events
-GET    /v1/employer/events/{id}
-PATCH  /v1/employer/events/{id}
-DELETE /v1/employer/events/{id}                               ← soft cancel
-
-GET    /v1/employer/events/{eventId}/applications
-PATCH  /v1/employer/events/{eventId}/applications/{appId}
-POST   /v1/employer/events/{eventId}/notifications            ← batch send
-GET    /v1/employer/events/{eventId}/notifications            ← aggregated history
-
-GET    /v1/employer/notifications
-POST   /v1/employer/notifications/{id}/read
-
-GET    /v1/employer/categories
-GET    /v1/employer/areas
-```
+Internal phase-by-phase progress is tracked in `STATUS.md` (gitignored — local only).
