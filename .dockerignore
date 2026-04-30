@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+.idea
+.vscode
+*.log
+*.md
+!README.md
+src/lib/keys/staging
+src/lib/keys/production
+.DS_Store
+Thumbs.db

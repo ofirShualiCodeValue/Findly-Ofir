@@ -1,0 +1,9 @@
+{
+  "rootDir": "src",
+  "modelsDir": "src/app/models",
+  "migrationsDir": "src/db/migrations",
+  "seedsDir": "src/db/seeds",
+  "configDir": "src/config",
+  "entitiesDir": "src/app/api/v1/entities",
+  "handlersDir": "src/app/api/v1/handlers"
+}
