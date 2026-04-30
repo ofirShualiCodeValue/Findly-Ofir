@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireRole } from '../../../helpers/authentication/dev';
+import { authenticate, requireRole } from '../../../helpers/authentication/middleware';
 import { UserRole } from '../../../../models/User';
 import profileRouter from './profile';
 import eventsRouter from './events';

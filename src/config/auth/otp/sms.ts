@@ -1,11 +1,16 @@
 import defaultConfig from './default';
-import { LocalizedString } from '@monkeytech/nodejs-core/i18n/LocalizedString';
 import { iSMSOTPAuthConfigOptions } from '@monkeytech/nodejs-core/authentication/config/otp';
+import { MockSMSGateway } from '../../../services/sms/MockSMSGateway';
+import { SimpleTemplate } from './template';
+
+const mockGateway = new MockSMSGateway();
 
 const config: iSMSOTPAuthConfigOptions = {
     ...defaultConfig,
-    smsGateway: { },
-    messageTemplate: new LocalizedString(``),
+    smsGateway: {
+        IL: mockGateway,
+    },
+    messageTemplate: new SimpleTemplate('קוד האימות שלך ב-Findly: {otp}'),
     defaultCountryCode: 'IL'
 };
 
