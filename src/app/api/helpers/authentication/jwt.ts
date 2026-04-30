@@ -6,14 +6,14 @@ export interface JWTPayload {
   role: string;
 }
 
-const secret: Secret = config.jwt.secret;
+const secret: Secret = config.get('jwt.secret');
 
 export function signToken(payload: JWTPayload): string {
   if (!secret) {
     throw new Error('JWT_SECRET is not configured');
   }
   const options: SignOptions = {
-    expiresIn: config.jwt.expiresIn as SignOptions['expiresIn'],
+    expiresIn: config.get('jwt.expiresIn') as SignOptions['expiresIn'],
     issuer: 'findly-server',
   };
   return jwt.sign(payload, secret, options);

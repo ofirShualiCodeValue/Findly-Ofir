@@ -109,7 +109,7 @@ router.post(
 
     // Dev convenience: surface the OTP in the response so the Flutter client
     // doesn't have to scrape the server log. NEVER enable this in production.
-    const devCode = config.env === 'development' ? creds.generateOtp() : undefined;
+    const devCode = config.get('env') === 'development' ? creds.generateOtp() : undefined;
 
     res.json({
       code: 200,
@@ -221,7 +221,7 @@ router.post(
 );
 
 // dev-only: do not expose in production
-if (config.env === 'development') {
+if (config.get('env') === 'development') {
   router.get(
     '/dev/last-otp',
     asyncHandler(async (req: Request, res: Response) => {

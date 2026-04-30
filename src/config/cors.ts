@@ -1,7 +1,8 @@
 import { CorsOptions } from 'cors';
 import config from '../../config';
 
-const allowedOrigins: string[] = config.cors.origins
+const allowedOrigins: string[] = config
+  .get('cors.origins')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -17,7 +18,7 @@ const corsOptions: CorsOptions = {
       callback(null, true);
       return;
     }
-    if (config.env !== 'production' && localhostRegex.test(origin)) {
+    if (config.get('env') !== 'production' && localhostRegex.test(origin)) {
       callback(null, true);
       return;
     }

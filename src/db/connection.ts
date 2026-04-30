@@ -3,12 +3,12 @@ import config from '../../config';
 
 export const sequelize = new Sequelize({
   dialect: 'postgres',
-  host: config.database.host,
-  port: config.database.port,
-  username: config.database.username,
-  password: config.database.password,
-  database: config.database.database,
-  logging: config.env === 'development' ? console.log : false,
+  host: config.get('db.host'),
+  port: config.get('db.port'),
+  username: config.get('db.user'),
+  password: config.get('db.password'),
+  database: config.get('db.name'),
+  logging: config.get('env') === 'development' ? console.log : false,
   pool: {
     max: 10,
     min: 0,

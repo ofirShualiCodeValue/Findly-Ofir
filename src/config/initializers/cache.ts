@@ -15,10 +15,10 @@ export async function connectCache(): Promise<void> {
 
   client = createClient({
     socket: {
-      host: config.redis.host,
-      port: config.redis.port,
+      host: config.get('redis.host'),
+      port: config.get('redis.port'),
     },
-    password: config.redis.password || undefined,
+    password: config.get('redis.password') || undefined,
   });
 
   client.on('error', (err) => {

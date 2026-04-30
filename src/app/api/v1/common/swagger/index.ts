@@ -13,7 +13,7 @@ const options: swaggerJSDoc.Options = {
         'Authentication is currently a dev-only X-User-Id header; will be replaced with JWT in phase 5.',
     },
     servers: [
-      { url: `http://localhost:${config.port}`, description: 'Local development' },
+      { url: `http://localhost:${config.get('port')}`, description: 'Local development' },
     ],
     tags: [
       { name: 'Health', description: 'Liveness checks' },
