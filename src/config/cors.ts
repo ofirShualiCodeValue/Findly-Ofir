@@ -6,9 +6,18 @@ const allowedOrigins: string[] = config.cors.origins
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+// Flutter web's debug server picks an ephemeral port (e.g. 5173, 51234, ...).
+// In development we relax the strict allowlist and accept any localhost origin
+// so the dev experience doesn't break every time the port changes.
+const localhostRegex = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/;
+
 const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    if (config.env !== 'production' && localhostRegex.test(origin)) {
       callback(null, true);
       return;
     }
