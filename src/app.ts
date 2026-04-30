@@ -1,17 +1,14 @@
-import path from 'path';
 import express, { Express, Request, Response } from 'express';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import swaggerUi from 'swagger-ui-express';
 import { getErrorHandler } from '@monkeytech/nodejs-core/network/errors/middleware';
 
 import config from '../config';
 import corsOptions from './config/cors';
-import api from './app/api/main';
-import { swaggerSpec } from './app/api/v1/common/swagger';
+import mountApi from './app/api/main';
 
 const app: Express = express();
 
@@ -56,22 +53,10 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
-app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
+// Mount all APIs (static uploads, swagger, /v1)
+mountApi(app);
 
-app.get('/docs.json', (_req: Request, res: Response) => {
-  res.json(swaggerSpec);
-});
-app.use(
-  '/docs',
-  swaggerUi.serve,
-  swaggerUi.setup(swaggerSpec, {
-    customSiteTitle: 'Findly API Docs',
-    swaggerOptions: { persistAuthorization: true },
-  }),
-);
-
-app.use('/v1', api);
-
+// Error handler from nodejs-core — catches APIError + AuthError + Sequelize ValidationError
 app.use(getErrorHandler(config.env));
 
 export default app;
