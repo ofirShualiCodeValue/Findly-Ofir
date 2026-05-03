@@ -23,6 +23,15 @@ export class EmployeeApplicationEntity extends Entity<EventApplication> {
   get decidedAt() {
     return this.instance.decidedAt;
   }
+  get reportedHours() {
+    return this.instance.reportedHours;
+  }
+  get reportedAt() {
+    return this.instance.reportedAt;
+  }
+  get hoursStatus() {
+    return this.instance.hoursStatus;
+  }
   get createdAt() {
     return this.instance.createdAt;
   }

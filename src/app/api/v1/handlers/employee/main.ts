@@ -3,12 +3,14 @@ import { authenticate, requireRole } from '../../../helpers/authentication/middl
 import { UserRole } from '../../../../models/User';
 import eventsRouter from './events';
 import applicationsRouter from './applications';
+import profileRouter from './profile';
 
 const router = Router();
 
 router.use(authenticate);
 router.use(requireRole(UserRole.EMPLOYEE));
 
+router.use('/profile', profileRouter);
 router.use('/events', eventsRouter);
 router.use('/', applicationsRouter);
 

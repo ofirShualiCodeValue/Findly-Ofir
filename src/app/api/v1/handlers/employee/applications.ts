@@ -5,7 +5,11 @@ import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
 import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
 import { Paginator } from '@monkeytech/nodejs-core/api/Paginator';
 import { Event, EventStatus } from '../../../../models/Event';
-import { EventApplication, EventApplicationStatus } from '../../../../models/EventApplication';
+import {
+  EventApplication,
+  EventApplicationStatus,
+  HoursStatus,
+} from '../../../../models/EventApplication';
 import { EmployeeApplicationEntity } from '../../entities/employee/applications/base';
 
 const router = Router();
@@ -157,6 +161,77 @@ router.delete(
       status: EventApplicationStatus.CANCELLED_BY_EMPLOYEE,
       decidedAt: new Date(),
     });
+    const fresh = await EventApplication.findByPk(app.id, {
+      include: EmployeeApplicationEntity.includes(req),
+    });
+    await renderSuccess(res, fresh, EmployeeApplicationEntity);
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/employee/applications/{id}/report-hours:
+ *   post:
+ *     tags: [Employee Applications]
+ *     summary: Report actual hours worked after a shift ended
+ *     description: |
+ *       Available only after the event's `end_at` has passed and the application
+ *       is `approved`. Sets `hours_status` to `pending_approval` until the
+ *       Employer confirms the reported hours.
+ *     security: [{ BearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [hours]
+ *             properties:
+ *               hours: { type: number, minimum: 0, maximum: 24 }
+ *     responses:
+ *       200: { description: Hours submitted, awaiting employer approval }
+ *       400: { $ref: '#/components/responses/ValidationError' }
+ *       404: { $ref: '#/components/responses/NotFound' }
+ *       409: { description: Shift not ended yet, or hours already approved }
+ */
+router.post(
+  '/applications/:id/report-hours',
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id)) throw new APIError(400, 'Invalid id');
+
+    const hours = Number(req.body?.hours);
+    if (!Number.isFinite(hours) || hours < 0 || hours > 24) {
+      throw new APIError(400, 'hours must be a number between 0 and 24');
+    }
+
+    const app = await EventApplication.findOne({
+      where: { id, userId: req.currentUser!.id },
+      include: [{ model: Event }],
+    });
+    if (!app) throw new APIError(404, 'Application not found');
+
+    if (app.status !== EventApplicationStatus.APPROVED) {
+      throw new APIError(409, 'Only approved applications can report hours');
+    }
+    if (app.hoursStatus === HoursStatus.APPROVED) {
+      throw new APIError(409, 'Hours have already been approved by the employer');
+    }
+    if (!app.event || new Date(app.event.endAt).getTime() > Date.now()) {
+      throw new APIError(409, 'The shift has not ended yet');
+    }
+
+    await app.update({
+      reportedHours: String(hours),
+      reportedAt: new Date(),
+      hoursStatus: HoursStatus.PENDING_APPROVAL,
+    });
+
     const fresh = await EventApplication.findByPk(app.id, {
       include: EmployeeApplicationEntity.includes(req),
     });
