@@ -91,6 +91,16 @@ router.post(
         } as Partial<EmployeeProfile>);
       }
       isNewUser = true;
+    } else if (role && Object.values(UserRole).includes(role) && role !== user.role) {
+      // Existing accounts have a fixed role: a phone registered as employer
+      // can never log in as employee, and vice versa. Reject explicitly so
+      // the client can show "this phone is already registered as X" instead
+      // of silently logging the user in as the wrong role.
+      throw new APIError(409, 'Phone already registered with a different role', {
+        code: 'ROLE_MISMATCH',
+        existing_role: user.role,
+        requested_role: role,
+      });
     }
 
     // messageOptions is required to prevent a destructure crash inside core's
