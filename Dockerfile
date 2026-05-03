@@ -32,6 +32,8 @@ RUN npm ci --omit=dev && rm -f .npmrc
 
 COPY --from=builder /app/dist ./dist
 
+RUN mkdir -p /app/uploads && chown -R app:app /app/uploads
+
 USER app
 
 EXPOSE 3000
