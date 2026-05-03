@@ -88,7 +88,14 @@ export class EmployeeEventEntity extends Entity<Event> {
         model: User,
         as: 'creator',
         attributes: ['id', 'fullName'],
-        include: [{ model: EmployerProfile, attributes: ['businessName', 'logoUrl'] }],
+        // latitude/longitude are loaded so the matcher can fall back to the
+        // employer's business address when the event itself has no coords.
+        include: [
+          {
+            model: EmployerProfile,
+            attributes: ['businessName', 'logoUrl', 'latitude', 'longitude'],
+          },
+        ],
       },
     ];
   }

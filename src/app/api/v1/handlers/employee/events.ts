@@ -9,6 +9,8 @@ import { EmployeeProfile } from '../../../../models/EmployeeProfile';
 import { UserIndustrySubCategory } from '../../../../models/UserIndustrySubCategory';
 import { EventApplication } from '../../../../models/EventApplication';
 import { EventInterest, EventInterestStatus } from '../../../../models/EventInterest';
+import { Shift } from '../../../../models/Shift';
+import { ShiftStaffingRequirement } from '../../../../models/ShiftStaffingRequirement';
 import { EmployeeEventEntity } from '../../entities/employee/events/base';
 import { haversineDistanceKm } from '../../../../../services/allowances';
 
@@ -134,12 +136,52 @@ router.get(
     let filters: MatchingFilters | null = null;
     if (matchEnabled) {
       filters = await loadMatchingFilters(currentUser.id);
+
+      // Match the employee against the union of two sources, since events
+      // may declare their role either at the event level (industry_subcategory_id)
+      // or — more commonly in practice — on individual shifts via
+      // shift_staffing_requirements. Either path counts as a match.
+      const matchingEventIds = new Set<number>();
       if (filters.subCategoryIds.length) {
-        (where as Record<string, unknown>).industrySubCategoryId = { [Op.in]: filters.subCategoryIds };
+        const eventsBySub = await Event.findAll({
+          where: { industrySubCategoryId: { [Op.in]: filters.subCategoryIds } },
+          attributes: ['id'],
+        });
+        for (const e of eventsBySub) matchingEventIds.add(e.id);
+
+        const shiftsByReq = await Shift.findAll({
+          attributes: ['eventId'],
+          include: [
+            {
+              model: ShiftStaffingRequirement,
+              required: true,
+              where: { industrySubCategoryId: { [Op.in]: filters.subCategoryIds } },
+              attributes: [],
+            },
+          ],
+        });
+        for (const s of shiftsByReq) matchingEventIds.add(s.eventId);
+
+        // No matches at all → short-circuit with empty result.
+        if (matchingEventIds.size === 0) {
+          paginator.setPaginationHeaders(req, res, [], 0);
+          await renderSuccess(res, [], EmployeeEventEntity);
+          return;
+        }
+        (where as Record<string, unknown>).id = { [Op.in]: [...matchingEventIds] };
       }
+
       const exclude = [...new Set([...filters.dismissedEventIds, ...filters.appliedEventIds])];
       if (exclude.length) {
-        (where as Record<string, unknown>).id = { [Op.notIn]: exclude };
+        const previous = (where as Record<string, unknown>).id as { [Op.in]?: number[] } | undefined;
+        const allowed = previous?.[Op.in] ?? null;
+        if (allowed) {
+          (where as Record<string, unknown>).id = {
+            [Op.in]: allowed.filter((id) => !exclude.includes(id)),
+          };
+        } else {
+          (where as Record<string, unknown>).id = { [Op.notIn]: exclude };
+        }
       }
     }
 
@@ -152,14 +194,20 @@ router.get(
     const filtered = filters
       ? candidates.filter((event) => {
           if (filters!.rangeKm !== null && filters!.homeLat !== null && filters!.homeLng !== null) {
-            if (event.latitude === null || event.longitude === null) return false;
-            const distance = haversineDistanceKm(
-              filters!.homeLat,
-              filters!.homeLng,
-              Number(event.latitude),
-              Number(event.longitude),
-            );
-            if (distance > filters!.rangeKm) return false;
+            // Try the event's coords first; fall back to the employer's
+            // business address. If neither exists we can't measure
+            // distance — let the event through rather than silently drop it.
+            const eventLat = event.latitude !== null ? Number(event.latitude) : null;
+            const eventLng = event.longitude !== null ? Number(event.longitude) : null;
+            const employerLat = event.creator?.employerProfile?.latitude;
+            const employerLng = event.creator?.employerProfile?.longitude;
+            const lat = eventLat ?? (employerLat !== null && employerLat !== undefined ? Number(employerLat) : null);
+            const lng = eventLng ?? (employerLng !== null && employerLng !== undefined ? Number(employerLng) : null);
+            if (lat !== null && lng !== null) {
+              const distance = haversineDistanceKm(filters!.homeLat, filters!.homeLng, lat, lng);
+              if (distance > filters!.rangeKm) return false;
+            }
+            // No coords anywhere → skip distance filter for this event.
           }
           if (filters!.baseRate !== null) {
             const rate = estimateEventHourlyRate(event);
