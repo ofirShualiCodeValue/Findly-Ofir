@@ -9,6 +9,7 @@ import applicationsRouter from './applications';
 import eventNotificationsRouter from './event-notifications';
 import notificationsRouter from './notifications';
 import shiftsRouter from './shifts';
+import capacityRouter from './capacity';
 
 const router = Router();
 
@@ -19,6 +20,7 @@ router.use('/profile', profileRouter);
 router.use('/events/:eventId/applications', applicationsRouter);
 router.use('/events/:eventId/notifications', eventNotificationsRouter);
 router.use('/events/:eventId/shifts', shiftsRouter);
+router.use('/events/:eventId/capacity', capacityRouter);
 router.use('/events', eventsRouter);
 router.use('/categories', categoriesRouter);
 router.use('/areas', areasRouter);

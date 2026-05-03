@@ -152,11 +152,30 @@ router.delete(
     if (Number.isNaN(id)) throw new APIError(400, 'Invalid id');
     const app = await EventApplication.findOne({
       where: { id, userId: req.currentUser!.id },
+      include: [{ model: Event }],
     });
     if (!app) throw new APIError(404, 'Application not found');
     if (app.status === EventApplicationStatus.CANCELLED_BY_EMPLOYEE) {
       throw new APIError(400, 'Already cancelled');
     }
+
+    // 48-hour cancellation policy. The first call returns the warning
+    // payload so the Flutter "Cancellation Policy" popup can show. The
+    // client confirms with `?force=true` (or { force: true } body) to
+    // proceed with the cancellation despite the late notice.
+    const force = req.query.force === 'true' || req.body?.force === true;
+    if (app.event && !force) {
+      const startMs = new Date(app.event.startAt).getTime();
+      const hoursUntil = (startMs - Date.now()) / (1000 * 60 * 60);
+      if (hoursUntil > 0 && hoursUntil < 48) {
+        throw new APIError(409, 'Cancellation within 48 hours of the shift', {
+          code: 'CANCELLATION_POLICY_LATE',
+          policy_threshold_hours: 48,
+          hours_until_shift: Math.round(hoursUntil * 100) / 100,
+        });
+      }
+    }
+
     await app.update({
       status: EventApplicationStatus.CANCELLED_BY_EMPLOYEE,
       decidedAt: new Date(),
