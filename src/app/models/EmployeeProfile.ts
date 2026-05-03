@@ -15,6 +15,11 @@ import {
 } from 'sequelize-typescript';
 import { User } from './User';
 
+export enum WorkStatus {
+  FREELANCER = 'freelancer',
+  SELF_EMPLOYED = 'self_employed',
+}
+
 @Table({ tableName: 'employee_profiles', timestamps: true, underscored: true })
 export class EmployeeProfile extends Model {
   @PrimaryKey
@@ -45,6 +50,34 @@ export class EmployeeProfile extends Model {
   @AllowNull(true)
   @Column(DataType.STRING(50))
   declare bankName: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.DATEONLY)
+  declare dateOfBirth: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.ENUM(...Object.values(WorkStatus)))
+  declare workStatus: WorkStatus | null;
+
+  @AllowNull(true)
+  @Column(DataType.STRING(2048))
+  declare avatarUrl: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
+  declare locationRangeKm: number | null;
+
+  @AllowNull(true)
+  @Column(DataType.DECIMAL(8, 2))
+  declare baseHourlyRate: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.DECIMAL(9, 6))
+  declare homeLatitude: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.DECIMAL(9, 6))
+  declare homeLongitude: string | null;
 
   @CreatedAt
   declare createdAt: Date;

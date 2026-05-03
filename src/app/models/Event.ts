@@ -89,6 +89,14 @@ export class Event extends Model {
   @Column(DataType.ENUM(...Object.values(EventStatus)))
   declare status: EventStatus;
 
+  @AllowNull(true)
+  @Column(DataType.DECIMAL(9, 6))
+  declare latitude: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.DECIMAL(9, 6))
+  declare longitude: string | null;
+
   @CreatedAt
   declare createdAt: Date;
 

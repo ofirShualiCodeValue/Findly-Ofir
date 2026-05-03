@@ -24,6 +24,13 @@ export enum EventApplicationStatus {
   CANCELLED_BY_EMPLOYER = 'cancelled_by_employer',
 }
 
+export enum HoursStatus {
+  NOT_REPORTED = 'not_reported',
+  PENDING_APPROVAL = 'pending_approval',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
+}
+
 @Table({ tableName: 'event_applications', timestamps: true, underscored: true })
 export class EventApplication extends Model {
   @PrimaryKey
@@ -66,6 +73,18 @@ export class EventApplication extends Model {
   @AllowNull(true)
   @Column(DataType.TEXT)
   declare note: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.DECIMAL(5, 2))
+  declare reportedHours: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.DATE)
+  declare reportedAt: Date | null;
+
+  @AllowNull(false)
+  @Column(DataType.ENUM(...Object.values(HoursStatus)))
+  declare hoursStatus: HoursStatus;
 
   @CreatedAt
   declare createdAt: Date;
