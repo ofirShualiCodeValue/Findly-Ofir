@@ -19,6 +19,7 @@ import { EventCategory } from './EventCategory';
 import { ActivityArea } from './ActivityArea';
 import { EventApplication } from './EventApplication';
 import { Notification } from './Notification';
+import { IndustrySubCategory } from './IndustrySubCategory';
 
 export enum EventStatus {
   DRAFT = 'draft',
@@ -97,6 +98,12 @@ export class Event extends Model {
   @Column(DataType.DECIMAL(9, 6))
   declare longitude: string | null;
 
+  @ForeignKey(() => IndustrySubCategory)
+  @AllowNull(true)
+  @Index
+  @Column(DataType.INTEGER)
+  declare industrySubCategoryId: number | null;
+
   @CreatedAt
   declare createdAt: Date;
 
@@ -111,6 +118,9 @@ export class Event extends Model {
 
   @BelongsTo(() => ActivityArea)
   declare activityArea?: ActivityArea;
+
+  @BelongsTo(() => IndustrySubCategory)
+  declare industrySubCategory?: IndustrySubCategory;
 
   @HasMany(() => EventApplication)
   declare applications?: EventApplication[];

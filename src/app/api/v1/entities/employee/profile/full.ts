@@ -3,10 +3,10 @@ import { Entity } from '@monkeytech/nodejs-core/api/entities/Entity';
 import { Request } from 'express';
 import { User } from '../../../../../models/User';
 import { EmployeeProfile } from '../../../../../models/EmployeeProfile';
-import { ActivityArea } from '../../../../../models/ActivityArea';
-import { EventCategory } from '../../../../../models/EventCategory';
+import { Industry } from '../../../../../models/Industry';
+import { IndustrySubCategory } from '../../../../../models/IndustrySubCategory';
 
-class ActivityAreaEntity extends Entity<ActivityArea> {
+class IndustryEntity extends Entity<Industry> {
   get id() {
     return this.instance.id;
   }
@@ -18,9 +18,12 @@ class ActivityAreaEntity extends Entity<ActivityArea> {
   }
 }
 
-class EventCategoryEntity extends Entity<EventCategory> {
+class IndustrySubCategoryEntity extends Entity<IndustrySubCategory> {
   get id() {
     return this.instance.id;
+  }
+  get industryId() {
+    return this.instance.industryId;
   }
   get name() {
     return this.instance.name;
@@ -37,6 +40,14 @@ export class EmployeeProfileFullEntity extends Entity<User> {
 
   get fullName() {
     return this.instance.fullName;
+  }
+
+  get firstName() {
+    return this.instance.firstName;
+  }
+
+  get lastName() {
+    return this.instance.lastName;
   }
 
   get phone() {
@@ -76,6 +87,7 @@ export class EmployeeProfileFullEntity extends Entity<User> {
       avatar_url: p.avatarUrl,
       location_range_km: p.locationRangeKm,
       base_hourly_rate: p.baseHourlyRate,
+      home_city: p.homeCity,
       home_latitude: p.homeLatitude,
       home_longitude: p.homeLongitude,
       is_complete: isProfileComplete(p),
@@ -83,14 +95,14 @@ export class EmployeeProfileFullEntity extends Entity<User> {
   }
 
   get industries() {
-    return (this.instance.eventCategories || []).map(
-      (cat) => new EventCategoryEntity(cat, this.context),
+    return (this.instance.industries || []).map(
+      (i) => new IndustryEntity(i, this.context),
     );
   }
 
-  get activityAreas() {
-    return (this.instance.activityAreas || []).map(
-      (area) => new ActivityAreaEntity(area, this.context),
+  get industrySubCategories() {
+    return (this.instance.industrySubCategories || []).map(
+      (s) => new IndustrySubCategoryEntity(s, this.context),
     );
   }
 
@@ -101,8 +113,8 @@ export class EmployeeProfileFullEntity extends Entity<User> {
   static includes(_context: Request): Includeable[] {
     return [
       { model: EmployeeProfile },
-      { model: ActivityArea, through: { attributes: [] } },
-      { model: EventCategory, through: { attributes: [] } },
+      { model: Industry, through: { attributes: [] } },
+      { model: IndustrySubCategory, through: { attributes: [] } },
     ];
   }
 }

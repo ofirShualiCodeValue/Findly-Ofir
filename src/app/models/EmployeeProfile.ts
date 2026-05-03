@@ -17,7 +17,7 @@ import { User } from './User';
 
 export enum WorkStatus {
   FREELANCER = 'freelancer',
-  SELF_EMPLOYED = 'self_employed',
+  SALARIED = 'salaried',
 }
 
 @Table({ tableName: 'employee_profiles', timestamps: true, underscored: true })
@@ -78,6 +78,10 @@ export class EmployeeProfile extends Model {
   @AllowNull(true)
   @Column(DataType.DECIMAL(9, 6))
   declare homeLongitude: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.STRING)
+  declare homeCity: string | null;
 
   @CreatedAt
   declare createdAt: Date;

@@ -6,7 +6,8 @@ import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
 import { Paginator } from '@monkeytech/nodejs-core/api/Paginator';
 import { Event, EventStatus } from '../../../../models/Event';
 import { EmployeeProfile } from '../../../../models/EmployeeProfile';
-import { EmployerEventCategory } from '../../../../models/EmployerEventCategory';
+import { UserIndustrySubCategory } from '../../../../models/UserIndustrySubCategory';
+import { EventApplication } from '../../../../models/EventApplication';
 import { EventInterest, EventInterestStatus } from '../../../../models/EventInterest';
 import { EmployeeEventEntity } from '../../entities/employee/events/base';
 import { haversineDistanceKm } from '../../../../../services/allowances';
@@ -15,39 +16,39 @@ const router = Router();
 const paginator = new Paginator(20);
 
 interface MatchingFilters {
-  industryIds: number[];
+  subCategoryIds: number[];
   rangeKm: number | null;
   baseRate: number | null;
   homeLat: number | null;
   homeLng: number | null;
   dismissedEventIds: number[];
+  appliedEventIds: number[];
 }
 
 async function loadMatchingFilters(userId: number): Promise<MatchingFilters> {
-  const [profile, industries, dismissed] = await Promise.all([
+  const [profile, subs, dismissed, applied] = await Promise.all([
     EmployeeProfile.findOne({ where: { userId } }),
-    EmployerEventCategory.findAll({ where: { userId } as never, attributes: ['eventCategoryId'] }),
+    UserIndustrySubCategory.findAll({ where: { userId }, attributes: ['industrySubCategoryId'] }),
     EventInterest.findAll({
       where: { userId, status: EventInterestStatus.NOT_INTERESTED },
       attributes: ['eventId'],
     }),
+    EventApplication.findAll({ where: { userId }, attributes: ['eventId'] }),
   ]);
 
   return {
-    industryIds: industries.map((i) => (i as unknown as { eventCategoryId: number }).eventCategoryId),
+    subCategoryIds: subs.map(
+      (s) => (s as unknown as { industrySubCategoryId: number }).industrySubCategoryId,
+    ),
     rangeKm: profile?.locationRangeKm ?? null,
     baseRate: profile?.baseHourlyRate ? Number(profile.baseHourlyRate) : null,
     homeLat: profile?.homeLatitude ? Number(profile.homeLatitude) : null,
     homeLng: profile?.homeLongitude ? Number(profile.homeLongitude) : null,
     dismissedEventIds: dismissed.map((d) => (d as unknown as { eventId: number }).eventId),
+    appliedEventIds: applied.map((a) => (a as unknown as { eventId: number }).eventId),
   };
 }
 
-/**
- * Estimated hourly rate for an event = budget / required_employees / shift_hours.
- * Used to compare against the employee's `base_hourly_rate`. Returns null when
- * the event lacks a sane shift duration.
- */
 function estimateEventHourlyRate(event: Event): number | null {
   const start = new Date(event.startAt).getTime();
   const end = new Date(event.endAt).getTime();
@@ -64,14 +65,20 @@ function estimateEventHourlyRate(event: Event): number | null {
  * /v1/employee/events:
  *   get:
  *     tags: [Employee Events]
- *     summary: Browse open events that match the employee
+ *     summary: Employee feed — Job Offers tab (default) or My Shifts tab
  *     description: |
- *       Job Offers feed. By default the response is filtered down to events that match
- *       the employee's industries, are within their `location_range_km`, pay at or above
- *       their `base_hourly_rate`, and have not been dismissed via "Not Interested".
- *       Pass `match=off` to bypass all matching filters.
+ *       The Figma's two-tab UI on the employee home maps to this endpoint:
+ *       - `tab=offers` (default): events that match the employee (industry
+ *         sub-category, location range, base rate) and that they haven't
+ *         dismissed or already applied to.
+ *       - `tab=shifts`: events the employee has an application on, regardless
+ *         of status — drives the "המשמרות שלי" tab.
+ *       Pass `match=off` on the offers tab to bypass the matcher (debug).
  *     security: [{ BearerAuth: [] }]
  *     parameters:
+ *       - in: query
+ *         name: tab
+ *         schema: { type: string, enum: [offers, shifts], default: offers }
  *       - in: query
  *         name: match
  *         schema: { type: string, enum: [on, off], default: on }
@@ -82,15 +89,43 @@ function estimateEventHourlyRate(event: Event): number | null {
  *         name: page_size
  *         schema: { type: integer, default: 20 }
  *     responses:
- *       200: { description: List of matching active future events }
+ *       200: { description: List of events }
  */
 router.get(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
     const currentUser = req.currentUser!;
+    const tab = req.query.tab === 'shifts' ? 'shifts' : 'offers';
     const matchEnabled = req.query.match !== 'off';
     const { offset, limit } = paginator.paginate(req);
 
+    if (tab === 'shifts') {
+      // My Shifts: every event with an application of mine, newest first.
+      const apps = await EventApplication.findAll({
+        where: { userId: currentUser.id },
+        order: [['createdAt', 'DESC']],
+        attributes: ['eventId'],
+      });
+      const eventIds = apps.map((a) => a.eventId);
+      if (!eventIds.length) {
+        paginator.setPaginationHeaders(req, res, [], 0);
+        await renderSuccess(res, [], EmployeeEventEntity);
+        return;
+      }
+      const { rows, count } = await Event.findAndCountAll({
+        where: { id: eventIds },
+        include: EmployeeEventEntity.includes(req),
+        offset,
+        limit,
+        order: [['startAt', 'ASC']],
+        distinct: true,
+      });
+      paginator.setPaginationHeaders(req, res, rows, count);
+      await renderSuccess(res, rows, EmployeeEventEntity);
+      return;
+    }
+
+    // Job Offers tab.
     const where: WhereOptions = {
       status: EventStatus.ACTIVE,
       startAt: { [Op.gte]: new Date() },
@@ -99,17 +134,15 @@ router.get(
     let filters: MatchingFilters | null = null;
     if (matchEnabled) {
       filters = await loadMatchingFilters(currentUser.id);
-      if (filters.industryIds.length) {
-        (where as Record<string, unknown>).eventCategoryId = { [Op.in]: filters.industryIds };
+      if (filters.subCategoryIds.length) {
+        (where as Record<string, unknown>).industrySubCategoryId = { [Op.in]: filters.subCategoryIds };
       }
-      if (filters.dismissedEventIds.length) {
-        (where as Record<string, unknown>).id = { [Op.notIn]: filters.dismissedEventIds };
+      const exclude = [...new Set([...filters.dismissedEventIds, ...filters.appliedEventIds])];
+      if (exclude.length) {
+        (where as Record<string, unknown>).id = { [Op.notIn]: exclude };
       }
     }
 
-    // Stage 1: SQL-level filtering (industry + dismissed). Stage 2 (distance + rate)
-    // happens in JS because the budget→hourly conversion and Haversine distance
-    // are not expressible cleanly in vanilla SQL without GEO extensions.
     const candidates = await Event.findAll({
       where,
       include: EmployeeEventEntity.includes(req),
@@ -149,14 +182,6 @@ router.get(
  *     tags: [Employee Events]
  *     summary: View a single open event
  *     security: [{ BearerAuth: [] }]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: integer }
- *     responses:
- *       200: { description: Single event }
- *       404: { $ref: '#/components/responses/NotFound' }
  */
 router.get(
   '/:id',
@@ -178,28 +203,7 @@ router.get(
  *   post:
  *     tags: [Employee Events]
  *     summary: Mark Interested or Not Interested in an event
- *     description: |
- *       Upserts the employee's interest on the event. "Not Interested" hides
- *       the event from future feed loads. "Interested" is informational —
- *       a formal application still goes through `POST /events/{id}/apply`.
  *     security: [{ BearerAuth: [] }]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: integer }
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [status]
- *             properties:
- *               status: { type: string, enum: [interested, not_interested] }
- *     responses:
- *       200: { description: Interest stored }
- *       404: { $ref: '#/components/responses/NotFound' }
  */
 router.post(
   '/:id/interest',

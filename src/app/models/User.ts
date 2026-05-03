@@ -25,6 +25,10 @@ import { ActivityArea } from './ActivityArea';
 import { EventCategory } from './EventCategory';
 import { EmployerActivityArea } from './EmployerActivityArea';
 import { EmployerEventCategory } from './EmployerEventCategory';
+import { Industry } from './Industry';
+import { IndustrySubCategory } from './IndustrySubCategory';
+import { UserIndustry } from './UserIndustry';
+import { UserIndustrySubCategory } from './UserIndustrySubCategory';
 
 export enum UserRole {
   EMPLOYER = 'employer',
@@ -47,6 +51,14 @@ export class User extends Model {
   @AllowNull(false)
   @Column(DataType.STRING)
   declare fullName: string;
+
+  @AllowNull(true)
+  @Column(DataType.STRING)
+  declare firstName: string | null;
+
+  @AllowNull(true)
+  @Column(DataType.STRING)
+  declare lastName: string | null;
 
   @Unique
   @AllowNull(false)
@@ -112,4 +124,10 @@ export class User extends Model {
 
   @BelongsToMany(() => EventCategory, () => EmployerEventCategory)
   declare eventCategories?: EventCategory[];
+
+  @BelongsToMany(() => Industry, () => UserIndustry)
+  declare industries?: Industry[];
+
+  @BelongsToMany(() => IndustrySubCategory, () => UserIndustrySubCategory)
+  declare industrySubCategories?: IndustrySubCategory[];
 }

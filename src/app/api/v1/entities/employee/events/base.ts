@@ -6,6 +6,8 @@ import { EventCategory } from '../../../../../models/EventCategory';
 import { ActivityArea } from '../../../../../models/ActivityArea';
 import { User } from '../../../../../models/User';
 import { EmployerProfile } from '../../../../../models/EmployerProfile';
+import { IndustrySubCategory } from '../../../../../models/IndustrySubCategory';
+import { Industry } from '../../../../../models/Industry';
 
 export class EmployeeEventEntity extends Entity<Event> {
   get id() {
@@ -35,6 +37,12 @@ export class EmployeeEventEntity extends Entity<Event> {
   get status() {
     return this.instance.status;
   }
+  get latitude() {
+    return this.instance.latitude;
+  }
+  get longitude() {
+    return this.instance.longitude;
+  }
   get eventCategory() {
     const cat = this.instance.eventCategory;
     if (!cat) return null;
@@ -44,6 +52,18 @@ export class EmployeeEventEntity extends Entity<Event> {
     const area = this.instance.activityArea;
     if (!area) return null;
     return { id: area.id, name: area.name, slug: area.slug };
+  }
+  get industrySubCategory() {
+    const sc = this.instance.industrySubCategory;
+    if (!sc) return null;
+    return {
+      id: sc.id,
+      name: sc.name,
+      slug: sc.slug,
+      industry: sc.industry
+        ? { id: sc.industry.id, name: sc.industry.name, slug: sc.industry.slug }
+        : null,
+    };
   }
   get employer() {
     const u = this.instance.creator;
@@ -60,6 +80,10 @@ export class EmployeeEventEntity extends Entity<Event> {
     return [
       { model: EventCategory },
       { model: ActivityArea },
+      {
+        model: IndustrySubCategory,
+        include: [{ model: Industry }],
+      },
       {
         model: User,
         as: 'creator',

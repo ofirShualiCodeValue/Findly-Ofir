@@ -6,10 +6,13 @@ import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
 import { sequelize } from '../../../../../db/connection';
 import { User } from '../../../../models/User';
 import { EmployeeProfile, WorkStatus } from '../../../../models/EmployeeProfile';
-import { EventCategory } from '../../../../models/EventCategory';
-import { EmployerEventCategory } from '../../../../models/EmployerEventCategory';
+import { Industry } from '../../../../models/Industry';
+import { IndustrySubCategory } from '../../../../models/IndustrySubCategory';
+import { UserIndustry } from '../../../../models/UserIndustry';
+import { UserIndustrySubCategory } from '../../../../models/UserIndustrySubCategory';
 import { EmployeeProfileFullEntity } from '../../entities/employee/profile/full';
 import { avatarUpload, publicAvatarUrl } from '../../../helpers/uploads/multer';
+import { geocodeIsraeliCity } from '../../../../../services/geocoding';
 
 const router = Router();
 
@@ -29,7 +32,14 @@ async function getOrThrowProfile(userId: number, transaction?: Transaction): Pro
   return profile;
 }
 
-function ageInYears(dateOfBirth: string): number {
+function ageFromYearOfBirth(yearOfBirth: number): number {
+  if (!Number.isInteger(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > new Date().getFullYear()) {
+    throw new APIError(400, 'Invalid year_of_birth');
+  }
+  return new Date().getFullYear() - yearOfBirth;
+}
+
+function ageFromDateString(dateOfBirth: string): number {
   const dob = new Date(dateOfBirth);
   if (Number.isNaN(dob.getTime())) {
     throw new APIError(400, 'Invalid date_of_birth (expected YYYY-MM-DD)');
@@ -41,8 +51,7 @@ function ageInYears(dateOfBirth: string): number {
   return age;
 }
 
-function assertAdult(dateOfBirth: string): void {
-  const age = ageInYears(dateOfBirth);
+function assertAdult(age: number): void {
   if (age < MIN_AGE) {
     throw new APIError(400, 'Age requirement not met', {
       code: 'AGE_REQUIREMENT_NOT_MET',
@@ -91,9 +100,7 @@ function assertPositiveInt(value: unknown, field: string): number {
  *     summary: Get current employee's full profile (Personal Details)
  *     security: [{ BearerAuth: [] }]
  *     responses:
- *       200: { description: Full profile with industries and activity areas }
- *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { $ref: '#/components/responses/Forbidden' }
+ *       200: { description: Full profile with industries and sub-categories }
  */
 router.get(
   '/',
@@ -117,6 +124,8 @@ router.get(
  *           schema:
  *             type: object
  *             properties:
+ *               first_name: { type: string }
+ *               last_name: { type: string }
  *               full_name: { type: string }
  *               email: { type: string, nullable: true }
  *               id_number: { type: string, nullable: true }
@@ -124,9 +133,10 @@ router.get(
  *               bank_branch: { type: string, nullable: true }
  *               bank_name: { type: string, nullable: true }
  *               date_of_birth: { type: string, format: date }
- *               work_status: { type: string, enum: [freelancer, self_employed] }
+ *               work_status: { type: string, enum: [freelancer, salaried] }
  *               location_range_km: { type: integer }
  *               base_hourly_rate: { type: number }
+ *               home_city: { type: string }
  *               home_latitude: { type: number }
  *               home_longitude: { type: number }
  *               notifications:
@@ -137,7 +147,6 @@ router.get(
  *                   push: { type: boolean }
  *     responses:
  *       200: { description: Updated profile }
- *       400: { $ref: '#/components/responses/ValidationError' }
  */
 router.patch(
   '/',
@@ -146,7 +155,7 @@ router.patch(
     const body = req.body ?? {};
 
     if (body.date_of_birth !== undefined && body.date_of_birth !== null) {
-      assertAdult(String(body.date_of_birth));
+      assertAdult(ageFromDateString(String(body.date_of_birth)));
     }
     if (body.work_status !== undefined && body.work_status !== null) {
       assertWorkStatus(body.work_status);
@@ -159,6 +168,18 @@ router.patch(
     await sequelize.transaction(async (transaction: Transaction) => {
       const userUpdates: Partial<User> = {};
       if (body.full_name !== undefined) userUpdates.fullName = body.full_name;
+      if (body.first_name !== undefined) userUpdates.firstName = body.first_name;
+      if (body.last_name !== undefined) userUpdates.lastName = body.last_name;
+      // If first/last passed but full_name wasn't, recompute full_name.
+      if (
+        (body.first_name !== undefined || body.last_name !== undefined) &&
+        body.full_name === undefined
+      ) {
+        const fn = body.first_name ?? '';
+        const ln = body.last_name ?? '';
+        const composed = `${fn} ${ln}`.trim();
+        if (composed) userUpdates.fullName = composed;
+      }
       if (body.email !== undefined) userUpdates.email = body.email;
       if (body.notifications && typeof body.notifications === 'object') {
         if (typeof body.notifications.email === 'boolean') userUpdates.notifyEmail = body.notifications.email;
@@ -170,25 +191,24 @@ router.patch(
       }
 
       const profileUpdates: Partial<EmployeeProfile> = {};
-      const profileFieldMap: Record<string, keyof EmployeeProfile> = {
+      const stringFieldMap: Record<string, keyof EmployeeProfile> = {
         id_number: 'idNumber',
         bank_account_number: 'bankAccountNumber',
         bank_branch: 'bankBranch',
         bank_name: 'bankName',
         date_of_birth: 'dateOfBirth',
         work_status: 'workStatus',
-        location_range_km: 'locationRangeKm',
         base_hourly_rate: 'baseHourlyRate',
         home_latitude: 'homeLatitude',
         home_longitude: 'homeLongitude',
+        home_city: 'homeCity',
       };
-      for (const [snake, camel] of Object.entries(profileFieldMap)) {
+      for (const [snake, camel] of Object.entries(stringFieldMap)) {
         if (body[snake] !== undefined) {
           (profileUpdates as Record<string, unknown>)[camel] =
             body[snake] === null ? null : String(body[snake]);
         }
       }
-      // Numbers stored as integers
       if (body.location_range_km !== undefined && body.location_range_km !== null) {
         (profileUpdates as Record<string, unknown>).locationRangeKm = Number(body.location_range_km);
       }
@@ -204,6 +224,21 @@ router.patch(
   }),
 );
 
+interface CompleteRegistrationBody {
+  first_name?: string;
+  last_name?: string;
+  date_of_birth?: string;
+  year_of_birth?: number;
+  work_status?: string;
+  location_range_km?: number;
+  base_hourly_rate?: number;
+  home_city?: string;
+  home_latitude?: number;
+  home_longitude?: number;
+  industry_ids?: number[];
+  industry_subcategory_ids?: number[];
+}
+
 /**
  * @openapi
  * /v1/employee/profile/complete:
@@ -211,9 +246,10 @@ router.patch(
  *     tags: [Employee Profile]
  *     summary: Complete first-time registration (age check + mandatory fields)
  *     description: |
- *       Validates the user is 18+ and sets all mandatory employee fields in one
- *       call. Returns the updated profile. Idempotent — can be called multiple
- *       times to update.
+ *       Single-shot registration. Accepts either `date_of_birth` (YYYY-MM-DD)
+ *       or `year_of_birth`. If `home_city` is supplied without coords, the
+ *       server geocodes it via Nominatim. Returns 400 with code
+ *       `AGE_REQUIREMENT_NOT_MET` if the user is under 18.
  *     security: [{ BearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -221,78 +257,129 @@ router.patch(
  *         application/json:
  *           schema:
  *             type: object
- *             required: [date_of_birth, work_status, location_range_km, base_hourly_rate, home_latitude, home_longitude]
  *             properties:
+ *               first_name: { type: string }
+ *               last_name: { type: string }
+ *               year_of_birth: { type: integer }
  *               date_of_birth: { type: string, format: date }
- *               work_status: { type: string, enum: [freelancer, self_employed] }
+ *               work_status: { type: string, enum: [freelancer, salaried] }
  *               location_range_km: { type: integer, minimum: 1 }
  *               base_hourly_rate: { type: number, minimum: 0 }
+ *               home_city: { type: string }
  *               home_latitude: { type: number }
  *               home_longitude: { type: number }
  *               industry_ids:
  *                 type: array
  *                 items: { type: integer }
+ *               industry_subcategory_ids:
+ *                 type: array
+ *                 items: { type: integer }
  *     responses:
  *       200: { description: Updated profile }
- *       400:
- *         description: Validation error (incl. AGE_REQUIREMENT_NOT_MET)
  */
 router.post(
   '/complete',
   asyncHandler(async (req: Request, res: Response) => {
     const currentUser = req.currentUser!;
-    const body = req.body ?? {};
+    const body: CompleteRegistrationBody = req.body ?? {};
 
-    const required = [
-      'date_of_birth',
-      'work_status',
-      'location_range_km',
-      'base_hourly_rate',
-      'home_latitude',
-      'home_longitude',
-    ];
-    const missing = required.filter((k) => body[k] === undefined || body[k] === null || body[k] === '');
-    if (missing.length) {
-      throw new APIError(400, `Missing required fields: ${missing.join(', ')}`);
+    // Age check via either a year (Figma form) or a full date.
+    let dobString: string | null = null;
+    let age: number;
+    if (body.date_of_birth) {
+      age = ageFromDateString(String(body.date_of_birth));
+      dobString = String(body.date_of_birth);
+    } else if (body.year_of_birth !== undefined) {
+      age = ageFromYearOfBirth(Number(body.year_of_birth));
+      // Store as Jan 1 of that year — granularity matches the wheel-picker UI.
+      dobString = `${Number(body.year_of_birth)}-01-01`;
+    } else {
+      throw new APIError(400, 'date_of_birth or year_of_birth is required');
     }
+    assertAdult(age);
 
-    assertAdult(String(body.date_of_birth));
     const workStatus = assertWorkStatus(body.work_status);
-    const homeLat = assertCoord(body.home_latitude, 'home_latitude', 90);
-    const homeLng = assertCoord(body.home_longitude, 'home_longitude', 180);
     const baseRate = assertNonNegativeNumber(body.base_hourly_rate, 'base_hourly_rate');
     const rangeKm = assertPositiveInt(body.location_range_km, 'location_range_km');
 
+    // Home location: prefer client-supplied coords. Fall back to geocoding
+    // the city when only the city is given. If both fail we error — the
+    // matcher needs coords.
+    let homeLat: number | null = null;
+    let homeLng: number | null = null;
+    if (body.home_latitude !== undefined && body.home_longitude !== undefined) {
+      homeLat = assertCoord(body.home_latitude, 'home_latitude', 90);
+      homeLng = assertCoord(body.home_longitude, 'home_longitude', 180);
+    } else if (body.home_city) {
+      const geo = await geocodeIsraeliCity(String(body.home_city));
+      if (!geo) {
+        throw new APIError(400, 'Could not resolve home_city to coordinates. Provide home_latitude/home_longitude.');
+      }
+      homeLat = geo.latitude;
+      homeLng = geo.longitude;
+    } else {
+      throw new APIError(400, 'home_city or home_latitude/home_longitude is required');
+    }
+
     const industryIds: number[] = Array.isArray(body.industry_ids) ? body.industry_ids : [];
-    if (industryIds.some((x) => !Number.isInteger(x))) {
-      throw new APIError(400, 'industry_ids must be an array of integers');
+    const subCategoryIds: number[] = Array.isArray(body.industry_subcategory_ids)
+      ? body.industry_subcategory_ids
+      : [];
+    if ([...industryIds, ...subCategoryIds].some((x) => !Number.isInteger(x))) {
+      throw new APIError(400, 'industry_ids and industry_subcategory_ids must be arrays of integers');
     }
     if (industryIds.length) {
-      const found = await EventCategory.count({ where: { id: industryIds } });
-      if (found !== industryIds.length) {
-        throw new APIError(400, 'One or more industry_ids are invalid');
+      const found = await Industry.count({ where: { id: industryIds } });
+      if (found !== industryIds.length) throw new APIError(400, 'One or more industry_ids are invalid');
+    }
+    if (subCategoryIds.length) {
+      const found = await IndustrySubCategory.count({ where: { id: subCategoryIds } });
+      if (found !== subCategoryIds.length) {
+        throw new APIError(400, 'One or more industry_subcategory_ids are invalid');
       }
     }
 
     await sequelize.transaction(async (transaction: Transaction) => {
+      const userUpdates: Partial<User> = {};
+      if (body.first_name !== undefined) userUpdates.firstName = body.first_name;
+      if (body.last_name !== undefined) userUpdates.lastName = body.last_name;
+      if (body.first_name || body.last_name) {
+        const composed = `${body.first_name ?? ''} ${body.last_name ?? ''}`.trim();
+        if (composed) userUpdates.fullName = composed;
+      }
+      if (Object.keys(userUpdates).length) {
+        await User.update(userUpdates, { where: { id: currentUser.id }, transaction });
+      }
+
       const profile = await getOrThrowProfile(currentUser.id, transaction);
       await profile.update(
         {
-          dateOfBirth: String(body.date_of_birth),
+          dateOfBirth: dobString,
           workStatus,
           locationRangeKm: rangeKm,
           baseHourlyRate: String(baseRate),
           homeLatitude: String(homeLat),
           homeLongitude: String(homeLng),
+          homeCity: body.home_city ? String(body.home_city) : null,
         },
         { transaction },
       );
 
-      // Replace industries (m:n via employer_event_categories — reused per agreement)
-      await EmployerEventCategory.destroy({ where: { userId: currentUser.id } as never, transaction });
+      // Replace industries + sub-categories.
+      await UserIndustry.destroy({ where: { userId: currentUser.id }, transaction });
       if (industryIds.length) {
-        await EmployerEventCategory.bulkCreate(
-          industryIds.map((id) => ({ userId: currentUser.id, eventCategoryId: id })) as never,
+        await UserIndustry.bulkCreate(
+          industryIds.map((id) => ({ userId: currentUser.id, industryId: id })) as never,
+          { transaction },
+        );
+      }
+      await UserIndustrySubCategory.destroy({ where: { userId: currentUser.id }, transaction });
+      if (subCategoryIds.length) {
+        await UserIndustrySubCategory.bulkCreate(
+          subCategoryIds.map((id) => ({
+            userId: currentUser.id,
+            industrySubCategoryId: id,
+          })) as never,
           { transaction },
         );
       }
@@ -306,9 +393,9 @@ router.post(
 /**
  * @openapi
  * /v1/employee/profile/industries:
- *   post:
+ *   put:
  *     tags: [Employee Profile]
- *     summary: Add a single industry (event category) to the employee
+ *     summary: Replace the employee's industries
  *     security: [{ BearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -316,33 +403,38 @@ router.post(
  *         application/json:
  *           schema:
  *             type: object
- *             required: [industry_id]
+ *             required: [industry_ids]
  *             properties:
- *               industry_id: { type: integer }
+ *               industry_ids:
+ *                 type: array
+ *                 items: { type: integer }
  *     responses:
  *       200: { description: Updated profile }
- *       400: { $ref: '#/components/responses/ValidationError' }
- *       409: { description: Industry already linked }
  */
-router.post(
+router.put(
   '/industries',
   asyncHandler(async (req: Request, res: Response) => {
     const currentUser = req.currentUser!;
-    const id = Number(req.body?.industry_id);
-    if (!Number.isInteger(id) || id < 1) throw new APIError(400, 'industry_id must be a positive integer');
+    const ids: unknown = req.body?.industry_ids;
+    if (!Array.isArray(ids) || ids.some((x) => !Number.isInteger(x))) {
+      throw new APIError(400, 'industry_ids must be an array of integers');
+    }
+    if (ids.length) {
+      const found = await Industry.count({ where: { id: ids as number[] } });
+      if (found !== (ids as number[]).length) {
+        throw new APIError(400, 'One or more industry_ids are invalid');
+      }
+    }
 
-    const cat = await EventCategory.findByPk(id);
-    if (!cat) throw new APIError(400, 'Invalid industry_id');
-
-    const existing = await EmployerEventCategory.findOne({
-      where: { userId: currentUser.id, eventCategoryId: id } as never,
+    await sequelize.transaction(async (transaction: Transaction) => {
+      await UserIndustry.destroy({ where: { userId: currentUser.id }, transaction });
+      if ((ids as number[]).length) {
+        await UserIndustry.bulkCreate(
+          (ids as number[]).map((id) => ({ userId: currentUser.id, industryId: id })) as never,
+          { transaction },
+        );
+      }
     });
-    if (existing) throw new APIError(409, 'Industry already linked');
-
-    await EmployerEventCategory.create({
-      userId: currentUser.id,
-      eventCategoryId: id,
-    } as never);
 
     const user = await loadFullProfile(req);
     await renderSuccess(res, user, EmployeeProfileFullEntity);
@@ -351,31 +443,52 @@ router.post(
 
 /**
  * @openapi
- * /v1/employee/profile/industries/{id}:
- *   delete:
+ * /v1/employee/profile/industry-subcategories:
+ *   put:
  *     tags: [Employee Profile]
- *     summary: Remove a single industry from the employee
+ *     summary: Replace the employee's industry sub-categories (specialties)
  *     security: [{ BearerAuth: [] }]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [industry_subcategory_ids]
+ *             properties:
+ *               industry_subcategory_ids:
+ *                 type: array
+ *                 items: { type: integer }
  *     responses:
  *       200: { description: Updated profile }
- *       404: { $ref: '#/components/responses/NotFound' }
  */
-router.delete(
-  '/industries/:id',
+router.put(
+  '/industry-subcategories',
   asyncHandler(async (req: Request, res: Response) => {
     const currentUser = req.currentUser!;
-    const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new APIError(400, 'Invalid industry id');
+    const ids: unknown = req.body?.industry_subcategory_ids;
+    if (!Array.isArray(ids) || ids.some((x) => !Number.isInteger(x))) {
+      throw new APIError(400, 'industry_subcategory_ids must be an array of integers');
+    }
+    if (ids.length) {
+      const found = await IndustrySubCategory.count({ where: { id: ids as number[] } });
+      if (found !== (ids as number[]).length) {
+        throw new APIError(400, 'One or more industry_subcategory_ids are invalid');
+      }
+    }
 
-    const removed = await EmployerEventCategory.destroy({
-      where: { userId: currentUser.id, eventCategoryId: id } as never,
+    await sequelize.transaction(async (transaction: Transaction) => {
+      await UserIndustrySubCategory.destroy({ where: { userId: currentUser.id }, transaction });
+      if ((ids as number[]).length) {
+        await UserIndustrySubCategory.bulkCreate(
+          (ids as number[]).map((id) => ({
+            userId: currentUser.id,
+            industrySubCategoryId: id,
+          })) as never,
+          { transaction },
+        );
+      }
     });
-    if (!removed) throw new APIError(404, 'Industry not linked to this user');
 
     const user = await loadFullProfile(req);
     await renderSuccess(res, user, EmployeeProfileFullEntity);
@@ -389,18 +502,6 @@ router.delete(
  *     tags: [Employee Profile]
  *     summary: Upload profile picture (multipart/form-data, field 'file')
  *     security: [{ BearerAuth: [] }]
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             required: [file]
- *             properties:
- *               file: { type: string, format: binary }
- *     responses:
- *       200: { description: Updated profile with new avatar_url }
- *       400: { $ref: '#/components/responses/ValidationError' }
  */
 router.post(
   '/avatar',
@@ -411,7 +512,6 @@ router.post(
     }
     const profile = await getOrThrowProfile(req.currentUser!.id);
     await profile.update({ avatarUrl: publicAvatarUrl(req.file.filename) });
-
     const user = await loadFullProfile(req);
     await renderSuccess(res, user, EmployeeProfileFullEntity);
   }),
