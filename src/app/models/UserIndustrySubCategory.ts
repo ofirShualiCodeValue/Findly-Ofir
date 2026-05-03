@@ -25,9 +25,11 @@ export class UserIndustrySubCategory extends Model {
   @Column(DataType.INTEGER)
   declare userId: number;
 
+  // Column is `industry_subcategory_id` (one word) — sequelize would
+  // otherwise map the camelCase property to `industry_sub_category_id`.
   @ForeignKey(() => IndustrySubCategory)
   @AllowNull(false)
-  @Column(DataType.INTEGER)
+  @Column({ type: DataType.INTEGER, field: 'industry_subcategory_id' })
   declare industrySubCategoryId: number;
 
   @CreatedAt

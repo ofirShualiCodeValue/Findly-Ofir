@@ -98,10 +98,12 @@ export class Event extends Model {
   @Column(DataType.DECIMAL(9, 6))
   declare longitude: string | null;
 
+  // Column is `industry_subcategory_id` (one word) — see note in
+  // UserIndustrySubCategory.ts.
   @ForeignKey(() => IndustrySubCategory)
   @AllowNull(true)
   @Index
-  @Column(DataType.INTEGER)
+  @Column({ type: DataType.INTEGER, field: 'industry_subcategory_id' })
   declare industrySubCategoryId: number | null;
 
   @CreatedAt
