@@ -8,6 +8,8 @@ import { User } from '../../../../../models/User';
 import { EmployerProfile } from '../../../../../models/EmployerProfile';
 import { IndustrySubCategory } from '../../../../../models/IndustrySubCategory';
 import { Industry } from '../../../../../models/Industry';
+import { Shift, ShiftStatus } from '../../../../../models/Shift';
+import { ShiftStaffingRequirement } from '../../../../../models/ShiftStaffingRequirement';
 
 export class EmployeeEventEntity extends Entity<Event> {
   get id() {
@@ -65,6 +67,31 @@ export class EmployeeEventEntity extends Entity<Event> {
         : null,
     };
   }
+
+  /// Active shifts on this event. Only roles needed by the worker are
+  /// surfaced here so the client can show real shift times (the event
+  /// itself often spans the whole day) and pre-fill the apply price.
+  get shifts() {
+    return (this.instance.shifts ?? []).map((s) => ({
+      id: s.id,
+      start_at: s.startAt,
+      end_at: s.endAt,
+      contact_person_name: s.contactPersonName,
+      contact_person_phone: s.contactPersonPhone,
+      status: s.status,
+      staffing_requirements: (s.staffingRequirements ?? []).map((r) => ({
+        industry_subcategory_id: r.industrySubCategoryId,
+        industry_subcategory: r.industrySubCategory
+          ? {
+              id: r.industrySubCategory.id,
+              name: r.industrySubCategory.name,
+              slug: r.industrySubCategory.slug,
+            }
+          : null,
+        required_count: r.requiredCount,
+      })),
+    }));
+  }
   get employer() {
     const u = this.instance.creator;
     if (!u) return null;
@@ -94,6 +121,17 @@ export class EmployeeEventEntity extends Entity<Event> {
           {
             model: EmployerProfile,
             attributes: ['businessName', 'logoUrl', 'latitude', 'longitude'],
+          },
+        ],
+      },
+      {
+        model: Shift,
+        where: { status: ShiftStatus.ACTIVE },
+        required: false,
+        include: [
+          {
+            model: ShiftStaffingRequirement,
+            include: [{ model: IndustrySubCategory }],
           },
         ],
       },
