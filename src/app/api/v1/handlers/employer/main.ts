@@ -8,6 +8,7 @@ import areasRouter from './areas';
 import applicationsRouter from './applications';
 import eventNotificationsRouter from './event-notifications';
 import notificationsRouter from './notifications';
+import shiftsRouter from './shifts';
 
 const router = Router();
 
@@ -17,6 +18,7 @@ router.use(requireRole(UserRole.EMPLOYER));
 router.use('/profile', profileRouter);
 router.use('/events/:eventId/applications', applicationsRouter);
 router.use('/events/:eventId/notifications', eventNotificationsRouter);
+router.use('/events/:eventId/shifts', shiftsRouter);
 router.use('/events', eventsRouter);
 router.use('/categories', categoriesRouter);
 router.use('/areas', areasRouter);

@@ -15,6 +15,7 @@ import {
 } from 'sequelize-typescript';
 import { Event } from './Event';
 import { User } from './User';
+import { Shift } from './Shift';
 
 export enum EventApplicationStatus {
   PENDING = 'pending',
@@ -43,6 +44,12 @@ export class EventApplication extends Model {
   @Index
   @Column(DataType.INTEGER)
   declare eventId: number;
+
+  @ForeignKey(() => Shift)
+  @AllowNull(true)
+  @Index
+  @Column(DataType.INTEGER)
+  declare shiftId: number | null;
 
   @ForeignKey(() => User)
   @AllowNull(false)
@@ -94,6 +101,9 @@ export class EventApplication extends Model {
 
   @BelongsTo(() => Event)
   declare event?: Event;
+
+  @BelongsTo(() => Shift)
+  declare shift?: Shift;
 
   @BelongsTo(() => User, 'userId')
   declare applicant?: User;

@@ -10,8 +10,13 @@ import { ActivityArea } from '../../../../models/ActivityArea';
 import { EventCategory } from '../../../../models/EventCategory';
 import { EmployerActivityArea } from '../../../../models/EmployerActivityArea';
 import { EmployerEventCategory } from '../../../../models/EmployerEventCategory';
+import { Industry } from '../../../../models/Industry';
+import { IndustrySubCategory } from '../../../../models/IndustrySubCategory';
+import { UserIndustry } from '../../../../models/UserIndustry';
+import { UserIndustrySubCategory } from '../../../../models/UserIndustrySubCategory';
 import { EmployerProfileFullEntity } from '../../entities/employer/profile/full';
 import { logoUpload, publicLogoUrl } from '../../../helpers/uploads/multer';
+import { geocodeIsraeliCity } from '../../../../../services/geocoding';
 
 const router = Router();
 
@@ -117,6 +122,8 @@ router.patch(
         'contact_phone',
         'address',
         'logo_url',
+        'latitude',
+        'longitude',
       ] as const;
       const camelMap: Record<string, keyof EmployerProfile> = {
         business_name: 'businessName',
@@ -126,12 +133,30 @@ router.patch(
         contact_phone: 'contactPhone',
         address: 'address',
         logo_url: 'logoUrl',
+        latitude: 'latitude',
+        longitude: 'longitude',
       };
 
       const profileUpdates: Partial<EmployerProfile> = {};
       for (const f of profileFields) {
         if (body[f] !== undefined) {
           (profileUpdates as Record<string, unknown>)[camelMap[f]] = body[f];
+        }
+      }
+
+      // Auto-geocode: if `address` is being set or changed and the client
+      // didn't pass explicit lat/lng, look the address up via Nominatim.
+      // Failure is non-fatal — the profile still saves without coords.
+      if (
+        body.address !== undefined &&
+        body.address !== null &&
+        body.latitude === undefined &&
+        body.longitude === undefined
+      ) {
+        const geo = await geocodeIsraeliCity(String(body.address));
+        if (geo) {
+          (profileUpdates as Record<string, unknown>).latitude = String(geo.latitude);
+          (profileUpdates as Record<string, unknown>).longitude = String(geo.longitude);
         }
       }
 
@@ -266,6 +291,85 @@ router.put(
       ids as number[],
       'eventCategoryId',
     );
+
+    const user = await loadFullProfile(req);
+    await renderSuccess(res, user, EmployerProfileFullEntity);
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/employer/profile/industries:
+ *   put:
+ *     tags: [Employer Profile]
+ *     summary: Replace the employer's industries
+ *     security: [{ BearerAuth: [] }]
+ */
+router.put(
+  '/industries',
+  asyncHandler(async (req: Request, res: Response) => {
+    const currentUser = req.currentUser!;
+    const ids: unknown = req.body?.industry_ids;
+    if (!Array.isArray(ids) || ids.some((x) => !Number.isInteger(x))) {
+      throw new APIError(400, 'industry_ids must be an array of integers');
+    }
+    if ((ids as number[]).length) {
+      const found = await Industry.count({ where: { id: ids as number[] } });
+      if (found !== (ids as number[]).length) {
+        throw new APIError(400, 'One or more industry_ids are invalid');
+      }
+    }
+
+    await sequelize.transaction(async (transaction: Transaction) => {
+      await UserIndustry.destroy({ where: { userId: currentUser.id }, transaction });
+      if ((ids as number[]).length) {
+        await UserIndustry.bulkCreate(
+          (ids as number[]).map((id) => ({ userId: currentUser.id, industryId: id })) as never,
+          { transaction },
+        );
+      }
+    });
+
+    const user = await loadFullProfile(req);
+    await renderSuccess(res, user, EmployerProfileFullEntity);
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/employer/profile/industry-subcategories:
+ *   put:
+ *     tags: [Employer Profile]
+ *     summary: Replace the employer's industry sub-categories (specialties)
+ *     security: [{ BearerAuth: [] }]
+ */
+router.put(
+  '/industry-subcategories',
+  asyncHandler(async (req: Request, res: Response) => {
+    const currentUser = req.currentUser!;
+    const ids: unknown = req.body?.industry_subcategory_ids;
+    if (!Array.isArray(ids) || ids.some((x) => !Number.isInteger(x))) {
+      throw new APIError(400, 'industry_subcategory_ids must be an array of integers');
+    }
+    if ((ids as number[]).length) {
+      const found = await IndustrySubCategory.count({ where: { id: ids as number[] } });
+      if (found !== (ids as number[]).length) {
+        throw new APIError(400, 'One or more industry_subcategory_ids are invalid');
+      }
+    }
+
+    await sequelize.transaction(async (transaction: Transaction) => {
+      await UserIndustrySubCategory.destroy({ where: { userId: currentUser.id }, transaction });
+      if ((ids as number[]).length) {
+        await UserIndustrySubCategory.bulkCreate(
+          (ids as number[]).map((id) => ({
+            userId: currentUser.id,
+            industrySubCategoryId: id,
+          })) as never,
+          { transaction },
+        );
+      }
+    });
 
     const user = await loadFullProfile(req);
     await renderSuccess(res, user, EmployerProfileFullEntity);

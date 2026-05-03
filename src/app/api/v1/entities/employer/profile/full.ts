@@ -5,6 +5,8 @@ import { User } from '../../../../../models/User';
 import { EmployerProfile } from '../../../../../models/EmployerProfile';
 import { ActivityArea } from '../../../../../models/ActivityArea';
 import { EventCategory } from '../../../../../models/EventCategory';
+import { Industry } from '../../../../../models/Industry';
+import { IndustrySubCategory } from '../../../../../models/IndustrySubCategory';
 
 class ActivityAreaEntity extends Entity<ActivityArea> {
   get id() {
@@ -21,6 +23,33 @@ class ActivityAreaEntity extends Entity<ActivityArea> {
 class EventCategoryEntity extends Entity<EventCategory> {
   get id() {
     return this.instance.id;
+  }
+  get name() {
+    return this.instance.name;
+  }
+  get slug() {
+    return this.instance.slug;
+  }
+}
+
+class IndustryEntity extends Entity<Industry> {
+  get id() {
+    return this.instance.id;
+  }
+  get name() {
+    return this.instance.name;
+  }
+  get slug() {
+    return this.instance.slug;
+  }
+}
+
+class IndustrySubCategoryEntity extends Entity<IndustrySubCategory> {
+  get id() {
+    return this.instance.id;
+  }
+  get industryId() {
+    return this.instance.industryId;
   }
   get name() {
     return this.instance.name;
@@ -70,6 +99,8 @@ export class EmployerProfileFullEntity extends Entity<User> {
       contact_phone: profile.contactPhone,
       address: profile.address,
       logo_url: profile.logoUrl,
+      latitude: profile.latitude,
+      longitude: profile.longitude,
     };
   }
 
@@ -85,6 +116,18 @@ export class EmployerProfileFullEntity extends Entity<User> {
     );
   }
 
+  get industries() {
+    return (this.instance.industries || []).map(
+      (i) => new IndustryEntity(i, this.context),
+    );
+  }
+
+  get industrySubCategories() {
+    return (this.instance.industrySubCategories || []).map(
+      (s) => new IndustrySubCategoryEntity(s, this.context),
+    );
+  }
+
   get createdAt() {
     return this.instance.createdAt;
   }
@@ -94,6 +137,8 @@ export class EmployerProfileFullEntity extends Entity<User> {
       { model: EmployerProfile },
       { model: ActivityArea, through: { attributes: [] } },
       { model: EventCategory, through: { attributes: [] } },
+      { model: Industry, through: { attributes: [] } },
+      { model: IndustrySubCategory, through: { attributes: [] } },
     ];
   }
 }

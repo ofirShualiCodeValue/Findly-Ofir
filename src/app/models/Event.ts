@@ -20,6 +20,7 @@ import { ActivityArea } from './ActivityArea';
 import { EventApplication } from './EventApplication';
 import { Notification } from './Notification';
 import { IndustrySubCategory } from './IndustrySubCategory';
+import { Shift } from './Shift';
 
 export enum EventStatus {
   DRAFT = 'draft',
@@ -123,6 +124,9 @@ export class Event extends Model {
 
   @BelongsTo(() => IndustrySubCategory)
   declare industrySubCategory?: IndustrySubCategory;
+
+  @HasMany(() => Shift)
+  declare shifts?: Shift[];
 
   @HasMany(() => EventApplication)
   declare applications?: EventApplication[];
