@@ -10,7 +10,7 @@ npm-debug.log*
 
 src/lib/keys/staging/
 src/lib/keys/production/
-uploads/
+/uploads/
 
 STATUS.md
 src/tmp/
