@@ -90,6 +90,7 @@ export class EventApplication extends Model {
   declare reportedAt: Date | null;
 
   @AllowNull(false)
+  @Default(HoursStatus.NOT_REPORTED)
   @Column(DataType.ENUM(...Object.values(HoursStatus)))
   declare hoursStatus: HoursStatus;
 

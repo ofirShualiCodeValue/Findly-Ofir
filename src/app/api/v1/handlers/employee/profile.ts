@@ -10,9 +10,14 @@ import { Industry } from '../../../../models/Industry';
 import { IndustrySubCategory } from '../../../../models/IndustrySubCategory';
 import { UserIndustry } from '../../../../models/UserIndustry';
 import { UserIndustrySubCategory } from '../../../../models/UserIndustrySubCategory';
+import { Certification } from '../../../../models/Certification';
+import { UserCertification } from '../../../../models/UserCertification';
+import { WorkerRating } from '../../../../models/WorkerRating';
+import { EventApplication, EventApplicationStatus } from '../../../../models/EventApplication';
+import { Event } from '../../../../models/Event';
 import { EmployeeProfileFullEntity } from '../../entities/employee/profile/full';
 import { avatarUpload, publicAvatarUrl } from '../../../helpers/uploads/multer';
-import { geocodeIsraeliCity } from '../../../../../services/geocoding';
+import { geocodeIsraeliCity } from '../../../helpers/geocoding';
 
 const router = Router();
 
@@ -512,6 +517,166 @@ router.post(
     }
     const profile = await getOrThrowProfile(req.currentUser!.id);
     await profile.update({ avatarUrl: publicAvatarUrl(req.file.filename) });
+    const user = await loadFullProfile(req);
+    await renderSuccess(res, user, EmployeeProfileFullEntity);
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/employee/profile/rating:
+ *   get:
+ *     tags: [Employee Profile]
+ *     summary: Current employee's own rating summary + recent feedback
+ *     description: |
+ *       Counterpart of `GET /v1/employer/events/:eventId/applications/:id`'s
+ *       rating block — but scoped to the worker themselves. Powers the stars
+ *       beneath the avatar on the employee profile screen and the rating
+ *       history card.
+ *     security: [{ BearerAuth: [] }]
+ *     responses:
+ *       200: { description: avg + count + history }
+ */
+router.get(
+  '/rating',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.currentUser!.id;
+
+    const all = await WorkerRating.findAll({
+      where: { workerUserId: userId },
+      attributes: ['rating'],
+    });
+    const avg = all.length
+      ? Math.round((all.reduce((s, r) => s + r.rating, 0) / all.length) * 100) / 100
+      : null;
+
+    const history = await WorkerRating.findAll({
+      where: { workerUserId: userId },
+      include: [
+        {
+          model: EventApplication,
+          attributes: ['id', 'eventId'],
+          include: [{ model: Event, attributes: ['id', 'name'] }],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: 20,
+    });
+
+    res.json({
+      code: 200,
+      message: 'ok',
+      data: {
+        avg,
+        count: all.length,
+        history: history.map((r) => ({
+          id: r.id,
+          rating: r.rating,
+          comment: r.comment,
+          created_at: r.createdAt,
+          event: r.application?.event
+            ? { id: r.application.event.id, name: r.application.event.name }
+            : null,
+        })),
+      },
+    });
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/employee/profile/earnings:
+ *   get:
+ *     tags: [Employee Profile]
+ *     summary: Monthly earnings rollup for the current employee
+ *     description: |
+ *       Sums `proposed_amount` over approved applications, bucketed by the
+ *       event's `start_at` month. Powers the "הכנסות חודשיות" card.
+ *       Returns the current month, the previous month, and an all-time total.
+ *     security: [{ BearerAuth: [] }]
+ *     responses:
+ *       200: { description: Earnings rollup }
+ */
+router.get(
+  '/earnings',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.currentUser!.id;
+
+    // Boundaries: start of last month → start of next month (exclusive).
+    const now = new Date();
+    const startCurrent = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startNext = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const startPrevious = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    const apps = await EventApplication.findAll({
+      where: {
+        userId,
+        status: EventApplicationStatus.APPROVED,
+      },
+      include: [
+        { model: Event, attributes: ['id', 'startAt'], required: true },
+      ],
+    });
+
+    let current = 0;
+    let previous = 0;
+    let total = 0;
+    for (const a of apps) {
+      const amount = Number(a.proposedAmount ?? 0);
+      if (!Number.isFinite(amount)) continue;
+      total += amount;
+      const startAt = a.event?.startAt ? new Date(a.event.startAt) : null;
+      if (!startAt) continue;
+      if (startAt >= startCurrent && startAt < startNext) current += amount;
+      else if (startAt >= startPrevious && startAt < startCurrent) previous += amount;
+    }
+
+    res.json({
+      code: 200,
+      message: 'ok',
+      data: {
+        current_month: Math.round(current * 100) / 100,
+        previous_month: Math.round(previous * 100) / 100,
+        total: Math.round(total * 100) / 100,
+        approved_application_count: apps.length,
+      },
+    });
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/employee/profile/certifications:
+ *   put:
+ *     tags: [Employee Profile]
+ *     summary: Replace the employee's certifications (m:n sync)
+ *     security: [{ BearerAuth: [] }]
+ */
+router.put(
+  '/certifications',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.currentUser!.id;
+    const ids: unknown = req.body?.certification_ids;
+    if (!Array.isArray(ids) || ids.some((x) => !Number.isInteger(x))) {
+      throw new APIError(400, 'certification_ids must be an array of integers');
+    }
+    if ((ids as number[]).length) {
+      const found = await Certification.count({ where: { id: ids as number[] } });
+      if (found !== (ids as number[]).length) {
+        throw new APIError(400, 'One or more certification_ids are invalid');
+      }
+    }
+
+    await sequelize.transaction(async (transaction: Transaction) => {
+      await UserCertification.destroy({ where: { userId }, transaction });
+      if ((ids as number[]).length) {
+        await UserCertification.bulkCreate(
+          (ids as number[]).map((id) => ({ userId, certificationId: id })) as never,
+          { transaction },
+        );
+      }
+    });
+
     const user = await loadFullProfile(req);
     await renderSuccess(res, user, EmployeeProfileFullEntity);
   }),

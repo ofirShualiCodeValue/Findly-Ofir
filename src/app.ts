@@ -11,6 +11,7 @@ import { getErrorHandler } from '@monkeytech/nodejs-core/network/errors/middlewa
 import config from '../config';
 import corsOptions from './config/cors';
 import mountApi from './app/api/main';
+import { apiDataMapper, friendlySequelizeMapper } from './app/api/helpers/errors';
 
 const app: Express = express();
 const env = config.get('env');
@@ -47,7 +48,12 @@ app.get('/health', (_req: Request, res: Response) => {
 // Mount all APIs (static uploads, swagger, /v1)
 mountApi(app);
 
-// Error handler from nodejs-core — catches APIError + AuthError + Sequelize ValidationError
-app.use(getErrorHandler(env));
+// `apiDataMapper` runs before core's apiErrorMapper so error-payload `data`
+// (e.g. CANCELLATION_POLICY_LATE + hours_until_shift) actually reaches the
+// client; `friendlySequelizeMapper` reshapes notNull / unique errors into
+// "Field 'x' is required" instead of the raw Sequelize text.
+app.use(
+  getErrorHandler(env, [apiDataMapper, friendlySequelizeMapper] as never[]),
+);
 
 export default app;

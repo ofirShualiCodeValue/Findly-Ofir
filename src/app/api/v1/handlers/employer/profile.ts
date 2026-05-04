@@ -16,7 +16,7 @@ import { UserIndustry } from '../../../../models/UserIndustry';
 import { UserIndustrySubCategory } from '../../../../models/UserIndustrySubCategory';
 import { EmployerProfileFullEntity } from '../../entities/employer/profile/full';
 import { logoUpload, publicLogoUrl } from '../../../helpers/uploads/multer';
-import { geocodeIsraeliCity } from '../../../../../services/geocoding';
+import { geocodeIsraeliCity } from '../../../helpers/geocoding';
 
 const router = Router();
 

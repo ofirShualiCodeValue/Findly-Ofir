@@ -1,6 +1,6 @@
 import defaultConfig from './default';
 import { iSMSOTPAuthConfigOptions } from '@monkeytech/nodejs-core/authentication/config/otp';
-import { MockSMSGateway } from '../../../services/sms/MockSMSGateway';
+import { MockSMSGateway } from './MockSMSGateway';
 import { SimpleTemplate } from './template';
 
 const mockGateway = new MockSMSGateway();
