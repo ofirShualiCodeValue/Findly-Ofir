@@ -29,6 +29,8 @@ import { Industry } from './Industry';
 import { IndustrySubCategory } from './IndustrySubCategory';
 import { UserIndustry } from './UserIndustry';
 import { UserIndustrySubCategory } from './UserIndustrySubCategory';
+import { Certification } from './Certification';
+import { UserCertification } from './UserCertification';
 
 export enum UserRole {
   EMPLOYER = 'employer',
@@ -130,4 +132,7 @@ export class User extends Model {
 
   @BelongsToMany(() => IndustrySubCategory, () => UserIndustrySubCategory)
   declare industrySubCategories?: IndustrySubCategory[];
+
+  @BelongsToMany(() => Certification, () => UserCertification)
+  declare certifications?: Certification[];
 }

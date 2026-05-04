@@ -7,6 +7,10 @@ import { Paginator } from '@monkeytech/nodejs-core/api/Paginator';
 import { EventApplication, EventApplicationStatus } from '../../../../models/EventApplication';
 import { WorkerRating } from '../../../../models/WorkerRating';
 import { Event } from '../../../../models/Event';
+import { User } from '../../../../models/User';
+import { EmployeeProfile } from '../../../../models/EmployeeProfile';
+import { Industry } from '../../../../models/Industry';
+import { IndustrySubCategory } from '../../../../models/IndustrySubCategory';
 import { ApplicationBaseEntity } from '../../entities/employer/applications/base';
 import { loadOwnedEvent } from '../../../helpers/events';
 
@@ -292,6 +296,135 @@ router.put(
         rating,
         comment,
         worker_rating: summary,
+      },
+    });
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/employer/events/{eventId}/applications/{applicationId}:
+ *   get:
+ *     tags: [Employer Applications]
+ *     summary: Full applicant profile (the modal an employer sees on tap)
+ *     description: |
+ *       Returns the application + the worker's full profile (employee profile,
+ *       industries, specialties) + ratings summary and history. Used by the
+ *       Flutter "worker profile" screen the employer opens to decide whether
+ *       to approve / reject.
+ *     security: [{ BearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: eventId
+ *         required: true
+ *         schema: { type: integer }
+ *       - in: path
+ *         name: applicationId
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200: { description: Full applicant detail }
+ *       404: { $ref: '#/components/responses/NotFound' }
+ */
+router.get(
+  '/:applicationId',
+  asyncHandler(async (req: Request, res: Response) => {
+    const event = await loadOwnedEvent(req, req.params.eventId);
+    const applicationId = parseInt(req.params.applicationId, 10);
+    if (Number.isNaN(applicationId)) {
+      throw new APIError(400, 'Invalid applicationId');
+    }
+
+    const application = await EventApplication.findOne({
+      where: { id: applicationId, eventId: event.id },
+      include: [
+        {
+          model: User,
+          as: 'applicant',
+          include: [
+            { model: EmployeeProfile },
+            { model: Industry, through: { attributes: [] } },
+            { model: IndustrySubCategory, through: { attributes: [] } },
+          ],
+        },
+      ],
+    });
+    if (!application || !application.applicant) {
+      throw new APIError(404, 'Application not found');
+    }
+
+    const worker = application.applicant;
+    const profile = worker.employeeProfile;
+    const summary = await averageRatingFor(worker.id);
+
+    // Rating history — newest first, capped to keep payload small. Each row
+    // carries the comment + the related event name so the modal can show
+    // "‎4★ — 'great worker' — 'Wedding A. Levy'".
+    const history = await WorkerRating.findAll({
+      where: { workerUserId: worker.id },
+      include: [
+        {
+          model: EventApplication,
+          attributes: ['id', 'eventId'],
+          include: [{ model: Event, attributes: ['id', 'name'] }],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: 20,
+    });
+
+    res.json({
+      code: 200,
+      message: 'ok',
+      data: {
+        application: {
+          id: application.id,
+          status: application.status,
+          proposed_amount: application.proposedAmount,
+          note: application.note,
+          created_at: application.createdAt,
+          decided_at: application.decidedAt,
+        },
+        applicant: {
+          id: worker.id,
+          full_name: worker.fullName,
+          phone: worker.phone,
+          email: worker.email,
+          profile: profile
+            ? {
+                avatar_url: profile.avatarUrl,
+                date_of_birth: profile.dateOfBirth,
+                work_status: profile.workStatus,
+                home_city: profile.homeCity,
+                location_range_km: profile.locationRangeKm,
+                base_hourly_rate: profile.baseHourlyRate,
+              }
+            : null,
+          industries: (worker.industries ?? []).map((i) => ({
+            id: i.id,
+            name: i.name,
+            slug: i.slug,
+          })),
+          industry_sub_categories: (worker.industrySubCategories ?? []).map((s) => ({
+            id: s.id,
+            name: s.name,
+            slug: s.slug,
+            industry_id: s.industryId,
+          })),
+        },
+        rating: {
+          avg: summary.avg,
+          count: summary.count,
+          history: history.map((r) => ({
+            id: r.id,
+            rating: r.rating,
+            comment: r.comment,
+            created_at: r.createdAt,
+            event: r.application?.event
+              ? { id: r.application.event.id, name: r.application.event.name }
+              : null,
+          })),
+        },
       },
     });
   }),

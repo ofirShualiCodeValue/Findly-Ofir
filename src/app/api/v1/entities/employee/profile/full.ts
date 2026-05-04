@@ -5,6 +5,7 @@ import { User } from '../../../../../models/User';
 import { EmployeeProfile } from '../../../../../models/EmployeeProfile';
 import { Industry } from '../../../../../models/Industry';
 import { IndustrySubCategory } from '../../../../../models/IndustrySubCategory';
+import { Certification } from '../../../../../models/Certification';
 
 class IndustryEntity extends Entity<Industry> {
   get id() {
@@ -24,6 +25,18 @@ class IndustrySubCategoryEntity extends Entity<IndustrySubCategory> {
   }
   get industryId() {
     return this.instance.industryId;
+  }
+  get name() {
+    return this.instance.name;
+  }
+  get slug() {
+    return this.instance.slug;
+  }
+}
+
+class CertificationEntity extends Entity<Certification> {
+  get id() {
+    return this.instance.id;
   }
   get name() {
     return this.instance.name;
@@ -106,6 +119,12 @@ export class EmployeeProfileFullEntity extends Entity<User> {
     );
   }
 
+  get certifications() {
+    return (this.instance.certifications || []).map(
+      (c) => new CertificationEntity(c, this.context),
+    );
+  }
+
   get createdAt() {
     return this.instance.createdAt;
   }
@@ -115,6 +134,7 @@ export class EmployeeProfileFullEntity extends Entity<User> {
       { model: EmployeeProfile },
       { model: Industry, through: { attributes: [] } },
       { model: IndustrySubCategory, through: { attributes: [] } },
+      { model: Certification, through: { attributes: [] } },
     ];
   }
 }
