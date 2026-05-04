@@ -27,8 +27,19 @@ cp .env.example .env
 # 3. Make sure Docker Desktop is running, then:
 docker compose up -d --build
 
-# 4. Run migrations (first time only)
-docker compose exec app npm run db:migrate
+# 4. Run migrations + seeds (first time, then again whenever a new
+#    migration is added). Note: the runtime image is built with
+#    --omit=dev and has no ts-node, so we run the CLI in a one-off
+#    node:20-alpine container that joins the same docker network.
+docker run --rm \
+  --network findly-server_findly-net \
+  -v "$(pwd):/app" -w /app \
+  -e DB_HOST=postgres -e DB_PORT=5432 \
+  -e DB_USER=findly -e DB_PASSWORD="$(grep ^DB_PASSWORD .env | cut -d= -f2)" \
+  -e DB_NAME=findly_dev \
+  node:20-alpine \
+  sh -c "npx ts-node ./node_modules/sequelize-cli/lib/sequelize db:migrate && \
+         npx ts-node ./node_modules/sequelize-cli/lib/sequelize db:seed:all"
 
 # 5. Verify
 curl http://localhost:3000/health
@@ -79,7 +90,19 @@ Single command brings up all four containers: `findly-app`, `findly-postgres`, `
 cp .env.example .env
 # edit .env — set GITHUB_TOKEN and JWT_SECRET
 docker compose up -d --build
-docker compose exec app npm run db:migrate
+
+# Apply migrations + seeds (industries, event categories, activity areas).
+# The runtime image has no ts-node, so we run the CLI in a one-off
+# node:20-alpine container that joins the same docker network.
+docker run --rm \
+  --network findly-server_findly-net \
+  -v "$(pwd):/app" -w /app \
+  -e DB_HOST=postgres -e DB_PORT=5432 \
+  -e DB_USER=findly -e DB_PASSWORD="$(grep ^DB_PASSWORD .env | cut -d= -f2)" \
+  -e DB_NAME=findly_dev \
+  node:20-alpine \
+  sh -c "npx ts-node ./node_modules/sequelize-cli/lib/sequelize db:migrate && \
+         npx ts-node ./node_modules/sequelize-cli/lib/sequelize db:seed:all"
 ```
 
 ### Services
@@ -103,8 +126,18 @@ docker compose ps                    # status of all services
 docker compose logs -f app           # follow app logs (Ctrl+C to exit)
 docker compose restart app           # restart only the app container
 docker compose exec app sh           # open shell inside the app container
-docker compose exec app npm run db:migrate     # run a script inside the container
 ```
+
+> **Migrations note:** the runtime image has no `ts-node`, so
+> `docker compose exec app npm run db:migrate` will fail with
+> `sh: ts-node: not found`. Use the one-off container command shown in
+> "First-time setup" above whenever you add a new migration.
+
+> **Local Postgres conflict on Windows**: if you have a native
+> `postgresql-x64-XX` service running, it claims port `5432` and you'll get
+> `password authentication failed` connecting from the host. Either stop
+> the service (`net stop postgresql-x64-18`) or change `DB_PORT=5433`
+> in `.env` (and rebuild postgres) — the docker network is unaffected.
 
 ---
 
