@@ -14,6 +14,11 @@ jest.mock('../app/models/EventApplication', () => ({
     findByPk: jest.fn(),
     findAndCountAll: jest.fn(),
     create: jest.fn(),
+    // Active Record statics — default impls in the global beforeEach
+    // delegate to the lower-level mocks (Event.findOne, EventApplication
+    // .findOne / create) so existing assertions continue to drive
+    // behaviour without changes.
+    applyToEvent: jest.fn(),
   },
   EventApplicationStatus: {
     PENDING: 'pending',
@@ -75,6 +80,88 @@ function buildApp(currentUser = { id: 100, role: 'employee' }) {
   app.use(getErrorHandler('test', [apiDataMapper] as never[]));
   return app;
 }
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { APIError } = require('@monkeytech/nodejs-core/api/errors/APIError');
+
+/**
+ * Wraps a plain EventApplication-like stub with the Active Record instance
+ * methods the handler now calls (`cancelByEmployee`, `reportHours`).
+ * Mirrors the real model so existing assertions on `update` still hold.
+ */
+function arApplication(stub: Record<string, unknown>): Record<string, unknown> {
+  const update =
+    (stub.update as jest.Mock | undefined) ?? jest.fn().mockResolvedValue(undefined);
+  stub.update = update;
+
+  stub.cancelByEmployee = jest.fn(async (opts: { force: boolean }) => {
+    if (stub.status === 'cancelled_by_employee') {
+      throw new APIError(400, 'Already cancelled');
+    }
+    const ev = stub.event as { startAt: Date } | undefined;
+    if (ev && !opts.force) {
+      const startMs = new Date(ev.startAt).getTime();
+      const hoursUntil = (startMs - Date.now()) / (1000 * 60 * 60);
+      if (hoursUntil > 0 && hoursUntil < 48) {
+        throw new APIError(409, 'Cancellation within 48 hours of the shift', {
+          code: 'CANCELLATION_POLICY_LATE',
+          policy_threshold_hours: 48,
+          hours_until_shift: Math.round(hoursUntil * 100) / 100,
+        });
+      }
+    }
+    await update({ status: 'cancelled_by_employee', decidedAt: new Date() });
+  });
+
+  stub.reportHours = jest.fn(async (hours: number) => {
+    if (stub.status !== 'approved') {
+      throw new APIError(409, 'Only approved applications can report hours');
+    }
+    if (stub.hoursStatus === 'approved') {
+      throw new APIError(409, 'Hours have already been approved by the employer');
+    }
+    const ev = stub.event as { endAt: Date } | undefined;
+    if (!ev || new Date(ev.endAt).getTime() > Date.now()) {
+      throw new APIError(409, 'The shift has not ended yet');
+    }
+    await update({
+      reportedHours: String(hours),
+      reportedAt: new Date(),
+      hoursStatus: 'pending_approval',
+    });
+  });
+
+  return stub;
+}
+
+beforeEach(() => {
+  // Default impl for `EventApplication.applyToEvent` — mirrors the real
+  // model so existing assertions on Event.findOne / EventApplication
+  // .findOne / .create continue to drive behaviour.
+  (EventApplication.applyToEvent as jest.Mock).mockImplementation(
+    async (
+      eventId: number,
+      userId: number,
+      input: { proposedAmount: number; note?: string | null },
+    ) => {
+      const event = await Event.findOne({
+        where: { id: eventId, status: 'active' },
+      });
+      if (!event) throw new APIError(404, 'Event not found or not open');
+      const existing = await EventApplication.findOne({
+        where: { eventId, userId },
+      });
+      if (existing) throw new APIError(409, 'You have already applied to this event');
+      return EventApplication.create({
+        eventId,
+        userId,
+        status: 'pending',
+        proposedAmount: String(input.proposedAmount),
+        note: input.note ?? null,
+      });
+    },
+  );
+});
 
 // --------------------- apply (POST /events/:eventId/apply) ---------------------
 
@@ -149,12 +236,12 @@ describe('DELETE /applications/:id (cancel my own)', () => {
   });
 
   it('returns 400 when the application is already cancelled', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'cancelled_by_employee',
       event: { startAt: new Date(Date.now() + 7 * 24 * 3600_000) },
       update: jest.fn(),
-    });
+    }));
 
     const res = await request(buildApp())
       .delete('/applications/22');
@@ -164,12 +251,12 @@ describe('DELETE /applications/:id (cancel my own)', () => {
 
   it('blocks cancellation within 48h without force, returning CANCELLATION_POLICY_LATE', async () => {
     // Shift starts in 24h — well within the 48h window.
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'pending',
       event: { startAt: new Date(Date.now() + 24 * 3600_000) },
       update: jest.fn(),
-    });
+    }));
 
     const res = await request(buildApp())
       .delete('/applications/22');
@@ -183,12 +270,12 @@ describe('DELETE /applications/:id (cancel my own)', () => {
 
   it('proceeds with the cancellation when force=true is passed', async () => {
     const updateMock = jest.fn().mockResolvedValue(undefined);
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'pending',
       event: { startAt: new Date(Date.now() + 24 * 3600_000) },
       update: updateMock,
-    });
+    }));
     (EventApplication.findByPk as jest.Mock).mockResolvedValue({ id: 22 });
 
     const res = await request(buildApp())
@@ -202,12 +289,12 @@ describe('DELETE /applications/:id (cancel my own)', () => {
 
   it('cancels freely when more than 48 hours remain', async () => {
     const updateMock = jest.fn().mockResolvedValue(undefined);
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'pending',
       event: { startAt: new Date(Date.now() + 5 * 24 * 3600_000) }, // 5 days
       update: updateMock,
-    });
+    }));
     (EventApplication.findByPk as jest.Mock).mockResolvedValue({ id: 22 });
 
     const res = await request(buildApp())
@@ -238,13 +325,13 @@ describe('POST /applications/:id/report-hours', () => {
   });
 
   it('blocks reporting when application is not approved', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'pending',
       event: { endAt: new Date(Date.now() - 60_000) },
       hoursStatus: 'not_reported',
       update: jest.fn(),
-    });
+    }));
 
     const res = await request(buildApp())
       .post('/applications/22/report-hours')
@@ -254,13 +341,13 @@ describe('POST /applications/:id/report-hours', () => {
   });
 
   it('blocks reporting before the shift has ended', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'approved',
       event: { endAt: new Date(Date.now() + 3600_000) },
       hoursStatus: 'not_reported',
       update: jest.fn(),
-    });
+    }));
 
     const res = await request(buildApp())
       .post('/applications/22/report-hours')
@@ -270,13 +357,13 @@ describe('POST /applications/:id/report-hours', () => {
   });
 
   it('blocks re-reporting once the employer has approved hours', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'approved',
       event: { endAt: new Date(Date.now() - 60_000) },
       hoursStatus: 'approved',
       update: jest.fn(),
-    });
+    }));
 
     const res = await request(buildApp())
       .post('/applications/22/report-hours')

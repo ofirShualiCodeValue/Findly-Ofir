@@ -101,7 +101,27 @@ export class EmployerProfileFullEntity extends Entity<User> {
       logo_url: profile.logoUrl,
       latitude: profile.latitude,
       longitude: profile.longitude,
+      is_complete: this.isComplete,
     };
+  }
+
+  /**
+   * True iff the employer has finished the post-signup completion flow:
+   * business name + owner + vat + address filled, and at least one row
+   * in each of activity_areas / event_categories / industries.
+   */
+  private get isComplete(): boolean {
+    const p = this.instance.employerProfile;
+    if (!p) return false;
+    return Boolean(
+      p.businessName &&
+        p.ownerName &&
+        p.vatNumber &&
+        p.address &&
+        (this.instance.activityAreas || []).length > 0 &&
+        (this.instance.eventCategories || []).length > 0 &&
+        (this.instance.industries || []).length > 0,
+    );
   }
 
   get activityAreas() {

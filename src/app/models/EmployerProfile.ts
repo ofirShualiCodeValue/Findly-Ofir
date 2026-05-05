@@ -13,7 +13,22 @@ import {
   CreatedAt,
   UpdatedAt,
 } from 'sequelize-typescript';
+import { Transaction } from 'sequelize';
+import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
+import { geocodeIsraeliCity } from '../api/helpers/geocoding';
 import { User } from './User';
+
+export interface EmployerProfileUpdateInput {
+  businessName?: string;
+  ownerName?: string | null;
+  vatNumber?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  address?: string | null;
+  logoUrl?: string | null;
+  latitude?: string | null;
+  longitude?: string | null;
+}
 
 @Table({ tableName: 'employer_profiles', timestamps: true, underscored: true })
 export class EmployerProfile extends Model {
@@ -43,11 +58,17 @@ export class EmployerProfile extends Model {
   declare vatNumber: string | null;
 
   @AllowNull(true)
-  @Column(DataType.STRING)
+  @Column({
+    type: DataType.STRING,
+    validate: { isEmail: true },
+  })
   declare contactEmail: string | null;
 
   @AllowNull(true)
-  @Column(DataType.STRING(20))
+  @Column({
+    type: DataType.STRING(20),
+    validate: { is: /^[+\d\s\-().]{7,20}$/ },
+  })
   declare contactPhone: string | null;
 
   @AllowNull(true)
@@ -74,4 +95,57 @@ export class EmployerProfile extends Model {
 
   @BelongsTo(() => User)
   declare user?: User;
+
+  // =====================================================================
+  // Domain logic — partial updates with auto-geocode + ownership lookup.
+  // =====================================================================
+
+  /**
+   * Find the profile that belongs to `userId`. Throws 404 if missing —
+   * which means the profile row wasn't created at signup, an invariant
+   * the SMS-OTP flow guarantees today.
+   */
+  static async findForUserOrThrow(
+    userId: number,
+    options?: { transaction?: Transaction },
+  ): Promise<EmployerProfile> {
+    const profile = await EmployerProfile.findOne({ where: { userId }, ...options });
+    if (!profile) throw new APIError(404, 'Employer profile not found');
+    return profile;
+  }
+
+  /**
+   * Apply a partial update. If `address` is changed without explicit
+   * `latitude` / `longitude`, the address is geocoded via Nominatim and
+   * coords are filled in. Geocode failure is non-fatal — the profile
+   * still saves without coords (matches the prior handler behaviour).
+   */
+  async applyUpdates(
+    input: EmployerProfileUpdateInput,
+    options?: { transaction?: Transaction },
+  ): Promise<void> {
+    const updates: Partial<EmployerProfile> = { ...input };
+
+    if (
+      input.address !== undefined &&
+      input.address !== null &&
+      input.latitude === undefined &&
+      input.longitude === undefined
+    ) {
+      const geo = await geocodeIsraeliCity(String(input.address));
+      if (geo) {
+        updates.latitude = String(geo.latitude);
+        updates.longitude = String(geo.longitude);
+      }
+    }
+
+    if (Object.keys(updates).length) {
+      await this.update(updates, options);
+    }
+  }
+
+  /** Persist a freshly-uploaded logo URL. */
+  async setLogoUrl(url: string): Promise<void> {
+    await this.update({ logoUrl: url });
+  }
 }

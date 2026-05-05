@@ -24,5 +24,38 @@ export function verifyToken(token: string): JWTPayload {
   if (typeof decoded === 'string') {
     throw new Error('Unexpected token format');
   }
+  // Reject registration tokens — they're not valid auth credentials.
+  if ((decoded as { purpose?: string }).purpose === 'registration') {
+    throw new Error('Registration tokens cannot be used to authenticate');
+  }
   return decoded as unknown as JWTPayload;
+}
+
+/**
+ * Short-lived (10 min) token issued after a successful OTP verification
+ * for a phone that doesn't yet have a User. Carries no user id — only
+ * the verified phone and a `purpose` claim — so it cannot be used as a
+ * regular auth Bearer token. Consumed by `POST /v1/shared/auth/register`
+ * to finish creating the account.
+ */
+export interface RegistrationTokenPayload {
+  phone: string;
+  purpose: 'registration';
+}
+
+export function signRegistrationToken(phone: string): string {
+  if (!secret) throw new Error('JWT_SECRET is not configured');
+  const payload: RegistrationTokenPayload = { phone, purpose: 'registration' };
+  return jwt.sign(payload, secret, {
+    expiresIn: '10m',
+    issuer: 'findly-server',
+  });
+}
+
+export function verifyRegistrationToken(token: string): RegistrationTokenPayload {
+  const decoded = jwt.verify(token, secret, { issuer: 'findly-server' });
+  if (typeof decoded === 'string' || (decoded as { purpose?: string }).purpose !== 'registration') {
+    throw new Error('Not a registration token');
+  }
+  return decoded as unknown as RegistrationTokenPayload;
 }

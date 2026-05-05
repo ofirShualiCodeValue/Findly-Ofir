@@ -261,11 +261,12 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const id = parseInt(req.params.id, 10);
     if (Number.isNaN(id)) throw new APIError(400, 'Invalid id');
-    const event = await Event.findOne({
-      where: { id, status: EventStatus.ACTIVE },
+    // Verify the event exists and is active. Re-fetch with the entity's
+    // eager-loads for the response.
+    await Event.findActiveOrThrow(id);
+    const event = await Event.findByPk(id, {
       include: EmployeeEventEntity.includes(req),
     });
-    if (!event) throw new APIError(404, 'Event not found or not open');
     await renderSuccess(res, event, EmployeeEventEntity);
   }),
 );
@@ -292,16 +293,8 @@ router.post(
       );
     }
 
-    const event = await Event.findOne({ where: { id: eventId, status: EventStatus.ACTIVE } });
-    if (!event) throw new APIError(404, 'Event not found or not open');
-
-    const userId = req.currentUser!.id;
-    const existing = await EventInterest.findOne({ where: { userId, eventId } });
-    if (existing) {
-      await existing.update({ status });
-    } else {
-      await EventInterest.create({ userId, eventId, status } as Partial<EventInterest>);
-    }
+    await Event.findActiveOrThrow(eventId);
+    await EventInterest.upsertFor(req.currentUser!.id, eventId, status);
 
     res.json({
       code: 200,

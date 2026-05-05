@@ -13,6 +13,12 @@ jest.mock('../app/models/Event', () => ({
     findAll: jest.fn(),
     findAndCountAll: jest.fn(),
     create: jest.fn(),
+    // Active Record domain methods — default impls in beforeEach delegate
+    // to the lower-level mocks so tests of input parsing + FK lookups
+    // continue to work without a behavioural rewrite.
+    createForOwner: jest.fn(),
+    assertCategoryExists: jest.fn(),
+    assertAreaExists: jest.fn(),
   },
   EventStatus: {
     DRAFT: 'draft',
@@ -85,12 +91,39 @@ const baseValid = {
   end_at: '2026-07-01T18:00:00Z',
 };
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { APIError } = require('@monkeytech/nodejs-core/api/errors/APIError');
+
 beforeEach(() => {
   // Default: category + area both exist.
   (EventCategory.findByPk as jest.Mock).mockResolvedValue({ id: 1, name: 'Wedding' });
   (ActivityArea.findByPk as jest.Mock).mockResolvedValue({ id: 2, name: 'Tel Aviv' });
   (Event.create as jest.Mock).mockResolvedValue({ id: 50 });
   (Event.findByPk as jest.Mock).mockResolvedValue({ id: 50 });
+
+  // Default impls for the new Active Record methods — mirror the real
+  // model so existing assertions against EventCategory.findByPk /
+  // ActivityArea.findByPk / Event.create continue to drive the behaviour.
+  (Event.assertCategoryExists as jest.Mock).mockImplementation(async (id: number) => {
+    const found = await EventCategory.findByPk(id);
+    if (!found) throw new APIError(400, 'Invalid event_category_id');
+  });
+  (Event.assertAreaExists as jest.Mock).mockImplementation(async (id: number) => {
+    const found = await ActivityArea.findByPk(id);
+    if (!found) throw new APIError(400, 'Invalid activity_area_id');
+  });
+  (Event.createForOwner as jest.Mock).mockImplementation(
+    async (userId: number, input: Record<string, unknown>) => {
+      const startAt = input.startAt as Date;
+      const endAt = input.endAt as Date;
+      if (endAt <= startAt) {
+        throw new APIError(400, 'end_at must be after start_at');
+      }
+      await (Event.assertCategoryExists as jest.Mock)(input.eventCategoryId);
+      await (Event.assertAreaExists as jest.Mock)(input.activityAreaId);
+      return Event.create({ createdByUserId: userId, ...input, status: input.status ?? 'draft' });
+    },
+  );
 });
 
 describe('POST /events — required fields', () => {
@@ -210,11 +243,16 @@ describe('PATCH /events/:id — owner-only edits', () => {
   it('rejects edits to a cancelled event', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { loadOwnedEvent } = require('../app/api/helpers/events');
+    // After the AR refactor, the handler delegates the cancellation guard
+    // to `event.applyUpdates`. The mock instance throws to mimic that.
     (loadOwnedEvent as jest.Mock).mockResolvedValue({
       id: 7,
       status: 'cancelled',
-      startAt: new Date('2026-07-01T10:00:00Z'),
-      endAt: new Date('2026-07-01T18:00:00Z'),
+      isCancelled: true,
+      applyUpdates: jest.fn().mockRejectedValue(
+        new APIError(400, 'Cannot edit a cancelled event'),
+      ),
+      cancel: jest.fn(),
       update: jest.fn(),
     });
 

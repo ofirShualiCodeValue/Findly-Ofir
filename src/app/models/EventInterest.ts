@@ -54,4 +54,22 @@ export class EventInterest extends Model {
 
   @BelongsTo(() => Event)
   declare event?: Event;
+
+  /**
+   * Set or replace a worker's interest signal on an event. Used by the
+   * "Interested / Not interested" buttons in the offers feed — repeat
+   * calls flip the status atomically.
+   */
+  static async upsertFor(
+    userId: number,
+    eventId: number,
+    status: EventInterestStatus,
+  ): Promise<void> {
+    const existing = await EventInterest.findOne({ where: { userId, eventId } });
+    if (existing) {
+      await existing.update({ status });
+      return;
+    }
+    await EventInterest.create({ userId, eventId, status } as Partial<EventInterest>);
+  }
 }

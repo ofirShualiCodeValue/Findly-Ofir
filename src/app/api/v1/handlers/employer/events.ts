@@ -1,12 +1,15 @@
-﻿import { Router, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WhereOptions } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
 import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
 import { Paginator } from '@monkeytech/nodejs-core/api/Paginator';
-import { Event, EventStatus } from '../../../../models/Event';
-import { EventCategory } from '../../../../models/EventCategory';
-import { ActivityArea } from '../../../../models/ActivityArea';
+import {
+  Event,
+  EventStatus,
+  EventCreateInput,
+  EventUpdateInput,
+} from '../../../../models/Event';
 import { EventBaseEntity } from '../../entities/employer/events/base';
 import { EventFullEntity } from '../../entities/employer/events/full';
 import { loadOwnedEvent } from '../../../helpers/events';
@@ -14,28 +17,10 @@ import { loadOwnedEvent } from '../../../helpers/events';
 const router = Router();
 const paginator = new Paginator(20);
 
-type EventUpdates = Partial<{
-  name: string;
-  description: string | null;
-  venue: string | null;
-  startAt: Date;
-  endAt: Date;
-  budget: string;
-  requiredEmployees: number;
-  eventCategoryId: number;
-  activityAreaId: number;
-  status: EventStatus;
-}>;
-
-async function assertCategoryExists(id: number): Promise<void> {
-  const cat = await EventCategory.findByPk(id);
-  if (!cat) throw new APIError(400, 'Invalid event_category_id');
-}
-
-async function assertAreaExists(id: number): Promise<void> {
-  const area = await ActivityArea.findByPk(id);
-  if (!area) throw new APIError(400, 'Invalid activity_area_id');
-}
+// =====================================================================
+// Input-validation helpers — pure parsing/shape checks. State-dependent
+// rules (FK existence, status guards, end>start) live on the Event model.
+// =====================================================================
 
 function parseDateOr400(value: unknown, field: string): Date {
   const d = new Date(value as string);
@@ -52,6 +37,67 @@ function assertNonNegative(value: unknown, field: string): void {
 function assertPositive(value: unknown, field: string): void {
   if (Number(value) < 1) throw new APIError(400, `${field} must be >= 1`);
 }
+
+function parseStatusOr400(value: unknown): EventStatus {
+  if (!Object.values(EventStatus).includes(value as EventStatus)) {
+    throw new APIError(400, 'Invalid status');
+  }
+  return value as EventStatus;
+}
+
+/** Translate the snake_case body into the typed create input. */
+function parseCreateBody(body: Record<string, unknown>): EventCreateInput {
+  const required = ['name', 'event_category_id', 'activity_area_id', 'start_at', 'end_at'];
+  const missing = required.filter((k) => body[k] === undefined || body[k] === null || body[k] === '');
+  if (missing.length) {
+    throw new APIError(400, `Missing fields: ${missing.join(', ')}`);
+  }
+
+  if (body.budget !== undefined) assertNonNegative(body.budget, 'budget');
+  if (body.required_employees !== undefined) {
+    assertPositive(body.required_employees, 'required_employees');
+  }
+
+  return {
+    name: body.name as string,
+    description: (body.description as string | null | undefined) ?? null,
+    venue: (body.venue as string | null | undefined) ?? null,
+    startAt: parseDateOr400(body.start_at, 'start_at'),
+    endAt: parseDateOr400(body.end_at, 'end_at'),
+    budget: body.budget !== undefined ? String(body.budget) : undefined,
+    requiredEmployees:
+      body.required_employees !== undefined ? Number(body.required_employees) : undefined,
+    eventCategoryId: Number(body.event_category_id),
+    activityAreaId: Number(body.activity_area_id),
+    status: body.status !== undefined ? parseStatusOr400(body.status) : undefined,
+  };
+}
+
+/** Translate the snake_case body into the partial update input. */
+function parseUpdateBody(body: Record<string, unknown>): EventUpdateInput {
+  const updates: EventUpdateInput = {};
+  if (body.name !== undefined) updates.name = body.name as string;
+  if (body.description !== undefined) updates.description = body.description as string | null;
+  if (body.venue !== undefined) updates.venue = body.venue as string | null;
+  if (body.budget !== undefined) {
+    assertNonNegative(body.budget, 'budget');
+    updates.budget = String(body.budget);
+  }
+  if (body.required_employees !== undefined) {
+    assertPositive(body.required_employees, 'required_employees');
+    updates.requiredEmployees = Number(body.required_employees);
+  }
+  if (body.start_at !== undefined) updates.startAt = parseDateOr400(body.start_at, 'start_at');
+  if (body.end_at !== undefined) updates.endAt = parseDateOr400(body.end_at, 'end_at');
+  if (body.event_category_id !== undefined) updates.eventCategoryId = Number(body.event_category_id);
+  if (body.activity_area_id !== undefined) updates.activityAreaId = Number(body.activity_area_id);
+  if (body.status !== undefined) updates.status = parseStatusOr400(body.status);
+  return updates;
+}
+
+// =====================================================================
+// Routes — thin handlers: parse input → call model method → render.
+// =====================================================================
 
 /**
  * @openapi
@@ -83,50 +129,12 @@ function assertPositive(value: unknown, field: string): void {
 router.post(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
-    const currentUser = req.currentUser!;
-    const body = req.body ?? {};
-
-    const required = ['name', 'event_category_id', 'activity_area_id', 'start_at', 'end_at'];
-    const missing = required.filter(
-      (k) => body[k] === undefined || body[k] === null || body[k] === '',
-    );
-    if (missing.length) {
-      throw new APIError(400, `Missing fields: ${missing.join(', ')}`);
-    }
-
-    const startAt = parseDateOr400(body.start_at, 'start_at');
-    const endAt = parseDateOr400(body.end_at, 'end_at');
-    if (endAt <= startAt) {
-      throw new APIError(400, 'end_at must be after start_at');
-    }
-
-    if (body.budget !== undefined) assertNonNegative(body.budget, 'budget');
-    if (body.required_employees !== undefined)
-      assertPositive(body.required_employees, 'required_employees');
-
-    await Promise.all([
-      assertCategoryExists(body.event_category_id),
-      assertAreaExists(body.activity_area_id),
-    ]);
-
-    const created = await Event.create({
-      createdByUserId: currentUser.id,
-      eventCategoryId: body.event_category_id,
-      activityAreaId: body.activity_area_id,
-      name: body.name,
-      description: body.description ?? null,
-      venue: body.venue ?? null,
-      startAt,
-      endAt,
-      budget: body.budget !== undefined ? String(body.budget) : '0',
-      requiredEmployees: body.required_employees ?? 1,
-      status: body.status ?? EventStatus.DRAFT,
-    } as Partial<Event>);
+    const input = parseCreateBody(req.body ?? {});
+    const created = await Event.createForOwner(req.currentUser!.id, input);
 
     const fresh = await Event.findByPk(created.id, {
       include: EventFullEntity.includes(req),
     });
-
     res.status(201);
     await renderSuccess(res, fresh, EventFullEntity);
   }),
@@ -168,10 +176,9 @@ router.post(
 router.get(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
-    const currentUser = req.currentUser!;
     const { offset, limit } = paginator.paginate(req);
 
-    const where: WhereOptions = { createdByUserId: currentUser.id };
+    const where: WhereOptions = { createdByUserId: req.currentUser!.id };
     if (typeof req.query.status === 'string') {
       (where as Record<string, unknown>).status = req.query.status;
     }
@@ -258,58 +265,12 @@ router.patch(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
     const event = await loadOwnedEvent(req, req.params.id);
-
-    if (event.status === EventStatus.CANCELLED) {
-      throw new APIError(400, 'Cannot edit a cancelled event');
-    }
-
-    const body = req.body ?? {};
-    const updates: EventUpdates = {};
-
-    if (body.name !== undefined) updates.name = body.name;
-    if (body.description !== undefined) updates.description = body.description;
-    if (body.venue !== undefined) updates.venue = body.venue;
-    if (body.budget !== undefined) {
-      assertNonNegative(body.budget, 'budget');
-      updates.budget = String(body.budget);
-    }
-    if (body.required_employees !== undefined) {
-      assertPositive(body.required_employees, 'required_employees');
-      updates.requiredEmployees = body.required_employees;
-    }
-    if (body.start_at !== undefined) {
-      updates.startAt = parseDateOr400(body.start_at, 'start_at');
-    }
-    if (body.end_at !== undefined) {
-      updates.endAt = parseDateOr400(body.end_at, 'end_at');
-    }
-    if (body.event_category_id !== undefined) {
-      await assertCategoryExists(body.event_category_id);
-      updates.eventCategoryId = body.event_category_id;
-    }
-    if (body.activity_area_id !== undefined) {
-      await assertAreaExists(body.activity_area_id);
-      updates.activityAreaId = body.activity_area_id;
-    }
-    if (body.status !== undefined) {
-      if (!Object.values(EventStatus).includes(body.status)) {
-        throw new APIError(400, 'Invalid status');
-      }
-      updates.status = body.status;
-    }
-
-    const finalStart = updates.startAt ?? event.startAt;
-    const finalEnd = updates.endAt ?? event.endAt;
-    if (finalEnd <= finalStart) {
-      throw new APIError(400, 'end_at must be after start_at');
-    }
-
-    await event.update(updates);
+    const updates = parseUpdateBody(req.body ?? {});
+    await event.applyUpdates(updates);
 
     const fresh = await Event.findByPk(event.id, {
       include: EventFullEntity.includes(req),
     });
-
     await renderSuccess(res, fresh, EventFullEntity);
   }),
 );
@@ -319,7 +280,7 @@ router.patch(
  * /v1/employer/events/{id}:
  *   delete:
  *     tags: [Employer Events]
- *     summary: Cancel an event (soft ג€” sets status to 'cancelled', does not remove the row)
+ *     summary: Cancel an event (soft — sets status to 'cancelled', does not remove the row)
  *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
@@ -344,17 +305,11 @@ router.delete(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
     const event = await loadOwnedEvent(req, req.params.id);
-
-    if (event.status === EventStatus.CANCELLED) {
-      throw new APIError(400, 'Event already cancelled');
-    }
-
-    await event.update({ status: EventStatus.CANCELLED });
+    await event.cancel();
 
     const fresh = await Event.findByPk(event.id, {
       include: EventFullEntity.includes(req),
     });
-
     await renderSuccess(res, fresh, EventFullEntity);
   }),
 );

@@ -17,31 +17,35 @@ import { loadOwnedEvent } from '../../../helpers/events';
 const router = Router({ mergeParams: true });
 const paginator = new Paginator(50);
 
-const TERMINAL_STATUSES: ReadonlySet<EventApplicationStatus> = new Set([
-  EventApplicationStatus.APPROVED,
-  EventApplicationStatus.REJECTED,
-  EventApplicationStatus.CANCELLED_BY_EMPLOYEE,
-  EventApplicationStatus.CANCELLED_BY_EMPLOYER,
-]);
-
+/** Statuses an employer is allowed to set via the decide endpoint. */
 const EMPLOYER_DECISIONS: ReadonlySet<EventApplicationStatus> = new Set([
   EventApplicationStatus.APPROVED,
   EventApplicationStatus.REJECTED,
   EventApplicationStatus.CANCELLED_BY_EMPLOYER,
 ]);
 
-/**
- * Average a worker's ratings (1–5). Returns null when the worker has no
- * ratings yet — caller decides how to render that.
- */
-async function averageRatingFor(userId: number): Promise<{ avg: number | null; count: number }> {
-  const ratings = await WorkerRating.findAll({
-    where: { workerUserId: userId },
-    attributes: ['rating'],
-  });
-  if (!ratings.length) return { avg: null, count: 0 };
-  const sum = ratings.reduce((s, r) => s + r.rating, 0);
-  return { avg: Math.round((sum / ratings.length) * 100) / 100, count: ratings.length };
+function parseApplicationIdOr400(raw: string): number {
+  const id = parseInt(raw, 10);
+  if (Number.isNaN(id)) throw new APIError(400, 'Invalid applicationId');
+  return id;
+}
+
+function parseRatingOr400(raw: unknown): number {
+  const rating = Number(raw);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw new APIError(400, 'rating must be an integer between 1 and 5');
+  }
+  return rating;
+}
+
+function parseDecisionStatusOr400(raw: unknown): EventApplicationStatus {
+  if (!raw || !EMPLOYER_DECISIONS.has(raw as EventApplicationStatus)) {
+    throw new APIError(
+      400,
+      'status must be one of: approved, rejected, cancelled_by_employer',
+    );
+  }
+  return raw as EventApplicationStatus;
 }
 
 /**
@@ -124,7 +128,7 @@ router.get(
 
     const enriched = await Promise.all(
       all.map(async (a) => {
-        const r = await averageRatingFor(a.userId);
+        const r = await WorkerRating.summaryFor(a.userId);
         return { application: a, rating: r };
       }),
     );
@@ -167,45 +171,20 @@ router.patch(
   '/:applicationId',
   asyncHandler(async (req: Request, res: Response) => {
     const event = await loadOwnedEvent(req, req.params.eventId);
-    const applicationId = parseInt(req.params.applicationId, 10);
-    if (Number.isNaN(applicationId)) {
-      throw new APIError(400, 'Invalid applicationId');
-    }
+    const applicationId = parseApplicationIdOr400(req.params.applicationId);
+    const status = parseDecisionStatusOr400(req.body?.status);
+    const note = (req.body?.note as string | null | undefined) ?? null;
 
     const application = await EventApplication.findOne({
       where: { id: applicationId, eventId: event.id },
     });
-    if (!application) {
-      throw new APIError(404, 'Application not found');
-    }
+    if (!application) throw new APIError(404, 'Application not found');
 
-    const { status, note } = req.body ?? {};
-    if (!status || !EMPLOYER_DECISIONS.has(status)) {
-      throw new APIError(
-        400,
-        'status must be one of: approved, rejected, cancelled_by_employer',
-      );
-    }
-
-    if (
-      status !== EventApplicationStatus.CANCELLED_BY_EMPLOYER &&
-      TERMINAL_STATUSES.has(application.status) &&
-      application.status !== EventApplicationStatus.PENDING
-    ) {
-      throw new APIError(400, `Cannot change status from ${application.status}`);
-    }
-
-    await application.update({
-      status,
-      note: note ?? application.note,
-      decidedAt: new Date(),
-      decidedByUserId: req.currentUser!.id,
-    });
+    await application.decide({ userId: req.currentUser!.id, status, note });
 
     const fresh = await EventApplication.findByPk(application.id, {
       include: ApplicationBaseEntity.includes(req),
     });
-
     await renderSuccess(res, fresh, ApplicationBaseEntity);
   }),
 );
@@ -250,13 +229,8 @@ router.put(
   '/:applicationId/rating',
   asyncHandler(async (req: Request, res: Response) => {
     const event = await loadOwnedEvent(req, req.params.eventId);
-    const applicationId = parseInt(req.params.applicationId, 10);
-    if (Number.isNaN(applicationId)) throw new APIError(400, 'Invalid applicationId');
-
-    const rating = Number(req.body?.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      throw new APIError(400, 'rating must be an integer between 1 and 5');
-    }
+    const applicationId = parseApplicationIdOr400(req.params.applicationId);
+    const rating = parseRatingOr400(req.body?.rating);
     const comment = typeof req.body?.comment === 'string' ? req.body.comment : null;
 
     const application = await EventApplication.findOne({
@@ -264,29 +238,15 @@ router.put(
       include: [{ model: Event }],
     });
     if (!application) throw new APIError(404, 'Application not found');
-    if (application.status !== EventApplicationStatus.APPROVED) {
-      throw new APIError(409, 'Only approved applications can be rated');
-    }
-    if (!application.event || new Date(application.event.endAt).getTime() > Date.now()) {
-      throw new APIError(409, 'The shift has not ended yet');
-    }
 
-    const existing = await WorkerRating.findOne({
-      where: { eventApplicationId: application.id },
+    application.assertRateable();
+    await WorkerRating.upsertFor(application, {
+      ratedByUserId: req.currentUser!.id,
+      rating,
+      comment,
     });
-    if (existing) {
-      await existing.update({ rating, comment });
-    } else {
-      await WorkerRating.create({
-        workerUserId: application.userId,
-        ratedByUserId: req.currentUser!.id,
-        eventApplicationId: application.id,
-        rating,
-        comment,
-      } as Partial<WorkerRating>);
-    }
+    const summary = await WorkerRating.summaryFor(application.userId);
 
-    const summary = await averageRatingFor(application.userId);
     res.json({
       code: 200,
       message: 'ok',
@@ -355,7 +315,7 @@ router.get(
 
     const worker = application.applicant;
     const profile = worker.employeeProfile;
-    const summary = await averageRatingFor(worker.id);
+    const summary = await WorkerRating.summaryFor(worker.id);
 
     // Rating history — newest first, capped to keep payload small. Each row
     // carries the comment + the related event name so the modal can show

@@ -1,25 +1,23 @@
 import { Router, Request, Response } from 'express';
-import { Transaction } from 'sequelize';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
 import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
-import { sequelize } from '../../../../../db/connection';
-import { Shift, ShiftStatus } from '../../../../models/Shift';
-import { ShiftStaffingRequirement } from '../../../../models/ShiftStaffingRequirement';
-import { IndustrySubCategory } from '../../../../models/IndustrySubCategory';
+import {
+  Shift,
+  ShiftStatus,
+  ShiftCreateInput,
+  ShiftUpdateInput,
+  StaffingRequirementInput,
+} from '../../../../models/Shift';
 import { loadOwnedEvent } from '../../../helpers/events';
 import { ShiftEntity } from '../../entities/employer/shifts/base';
 
-// Israeli labor convention used by the Findly product spec.
-const MIN_SHIFT_HOURS = 6;
-const MAX_SHIFT_HOURS = 12;
-
 const router = Router({ mergeParams: true });
 
-interface StaffingRequirementInput {
-  industry_subcategory_id: number;
-  required_count?: number;
-}
+// =====================================================================
+// Input-validation helpers — pure shape/format checks. State-dependent
+// rules (duration, FK existence) live on the Shift model.
+// =====================================================================
 
 function parseDateOr400(value: unknown, field: string): Date {
   const d = new Date(value as string);
@@ -27,24 +25,14 @@ function parseDateOr400(value: unknown, field: string): Date {
   return d;
 }
 
-function assertShiftDuration(startAt: Date, endAt: Date): void {
-  if (endAt <= startAt) {
-    throw new APIError(400, 'end_at must be after start_at');
-  }
-  const hours = (endAt.getTime() - startAt.getTime()) / (1000 * 60 * 60);
-  if (hours < MIN_SHIFT_HOURS || hours > MAX_SHIFT_HOURS) {
-    throw new APIError(400, 'Shift duration must be between 6 and 12 hours', {
-      code: 'SHIFT_DURATION_INVALID',
-      min_hours: MIN_SHIFT_HOURS,
-      max_hours: MAX_SHIFT_HOURS,
-      actual_hours: Math.round(hours * 100) / 100,
-    });
-  }
+function parseShiftIdOr400(raw: string): number {
+  const id = parseInt(raw, 10);
+  if (Number.isNaN(id)) throw new APIError(400, 'Invalid shift id');
+  return id;
 }
 
-async function validateStaffingRequirements(
-  rawList: unknown,
-): Promise<StaffingRequirementInput[]> {
+/** Parse + de-duplicate the staffing requirements list. */
+function parseStaffingRequirements(rawList: unknown): StaffingRequirementInput[] {
   if (rawList === undefined) return [];
   if (!Array.isArray(rawList)) {
     throw new APIError(400, 'staffing_requirements must be an array');
@@ -71,24 +59,59 @@ async function validateStaffingRequirements(
     }
     seenIds.add(subId as number);
     out.push({
-      industry_subcategory_id: subId as number,
-      required_count: (count as number | undefined) ?? 1,
+      industrySubCategoryId: subId as number,
+      requiredCount: (count as number | undefined) ?? 1,
     });
-  }
-  if (out.length) {
-    const found = await IndustrySubCategory.count({
-      where: { id: out.map((r) => r.industry_subcategory_id) },
-    });
-    if (found !== out.length) {
-      throw new APIError(400, 'One or more industry_subcategory_id values are invalid');
-    }
   }
   return out;
 }
 
-async function loadShiftWithIncludes(shiftId: number): Promise<Shift> {
+function parseShiftStatusOr400(raw: unknown): ShiftStatus {
+  if (!Object.values(ShiftStatus).includes(raw as ShiftStatus)) {
+    throw new APIError(400, `status must be one of: ${Object.values(ShiftStatus).join(', ')}`);
+  }
+  return raw as ShiftStatus;
+}
+
+function parseCreateBody(body: Record<string, unknown>): ShiftCreateInput {
+  const required = ['start_at', 'end_at'];
+  const missing = required.filter((k) => !body[k]);
+  if (missing.length) {
+    throw new APIError(400, `Missing fields: ${missing.join(', ')}`);
+  }
+  return {
+    startAt: parseDateOr400(body.start_at, 'start_at'),
+    endAt: parseDateOr400(body.end_at, 'end_at'),
+    contactPersonName: (body.contact_person_name as string | null | undefined) ?? null,
+    contactPersonPhone: (body.contact_person_phone as string | null | undefined) ?? null,
+    notes: (body.notes as string | null | undefined) ?? null,
+    staffingRequirements: parseStaffingRequirements(body.staffing_requirements),
+  };
+}
+
+function parseUpdateBody(body: Record<string, unknown>): ShiftUpdateInput {
+  const updates: ShiftUpdateInput = {};
+  if (body.start_at !== undefined) updates.startAt = parseDateOr400(body.start_at, 'start_at');
+  if (body.end_at !== undefined) updates.endAt = parseDateOr400(body.end_at, 'end_at');
+  if (body.contact_person_name !== undefined) {
+    updates.contactPersonName = body.contact_person_name as string | null;
+  }
+  if (body.contact_person_phone !== undefined) {
+    updates.contactPersonPhone = body.contact_person_phone as string | null;
+  }
+  if (body.notes !== undefined) updates.notes = body.notes as string | null;
+  if (body.staffing_requirements !== undefined) {
+    updates.staffingRequirements = parseStaffingRequirements(body.staffing_requirements);
+  }
+  // status is enum-validated but applied via direct update (not via
+  // applyUpdates) since it's an admin-style override. Caller asks for the
+  // status after parsing — we surface the value here for the route below.
+  return updates;
+}
+
+async function loadShiftWithIncludes(shiftId: number, req: Request): Promise<Shift> {
   const fresh = await Shift.findByPk(shiftId, {
-    include: ShiftEntity.includes({} as Request),
+    include: ShiftEntity.includes(req),
   });
   if (!fresh) throw new APIError(404, 'Shift not found');
   return fresh;
@@ -102,6 +125,10 @@ async function assertOwnedShift(req: Request, shiftId: number): Promise<Shift> {
   if (!shift) throw new APIError(404, 'Shift not found');
   return shift;
 }
+
+// =====================================================================
+// Routes — thin handlers: parse input → call model method → render.
+// =====================================================================
 
 /**
  * @openapi
@@ -177,47 +204,11 @@ router.post(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
     const event = await loadOwnedEvent(req, req.params.eventId);
-    const body = req.body ?? {};
-
-    const required = ['start_at', 'end_at'];
-    const missing = required.filter((k) => !body[k]);
-    if (missing.length) {
-      throw new APIError(400, `Missing fields: ${missing.join(', ')}`);
-    }
-
-    const startAt = parseDateOr400(body.start_at, 'start_at');
-    const endAt = parseDateOr400(body.end_at, 'end_at');
-    assertShiftDuration(startAt, endAt);
-    const reqs = await validateStaffingRequirements(body.staffing_requirements);
-
-    const created = await sequelize.transaction(async (transaction: Transaction) => {
-      const shift = await Shift.create(
-        {
-          eventId: event.id,
-          startAt,
-          endAt,
-          contactPersonName: body.contact_person_name ?? null,
-          contactPersonPhone: body.contact_person_phone ?? null,
-          notes: body.notes ?? null,
-          status: ShiftStatus.ACTIVE,
-        } as Partial<Shift>,
-        { transaction },
-      );
-      if (reqs.length) {
-        await ShiftStaffingRequirement.bulkCreate(
-          reqs.map((r) => ({
-            shiftId: shift.id,
-            industrySubCategoryId: r.industry_subcategory_id,
-            requiredCount: r.required_count ?? 1,
-          })) as never,
-          { transaction },
-        );
-      }
-      return shift;
-    });
+    const input = parseCreateBody(req.body ?? {});
+    const created = await Shift.createForEvent(event.id, input);
 
     res.status(201);
-    const fresh = await loadShiftWithIncludes(created.id);
+    const fresh = await loadShiftWithIncludes(created.id, req);
     await renderSuccess(res, fresh, ShiftEntity);
   }),
 );
@@ -233,54 +224,20 @@ router.post(
 router.patch(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
-    const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new APIError(400, 'Invalid shift id');
+    const id = parseShiftIdOr400(req.params.id);
     const shift = await assertOwnedShift(req, id);
-    const body = req.body ?? {};
+    const updates = parseUpdateBody(req.body ?? {});
 
-    let nextStart = shift.startAt;
-    let nextEnd = shift.endAt;
-    if (body.start_at !== undefined) nextStart = parseDateOr400(body.start_at, 'start_at');
-    if (body.end_at !== undefined) nextEnd = parseDateOr400(body.end_at, 'end_at');
-    if (body.start_at !== undefined || body.end_at !== undefined) {
-      assertShiftDuration(nextStart, nextEnd);
+    // Status is an admin-style override applied directly; everything else
+    // routes through `applyUpdates` so the duration rule + staffing FKs
+    // are enforced atomically.
+    if (req.body?.status !== undefined) {
+      const status = parseShiftStatusOr400(req.body.status);
+      await shift.update({ status });
     }
+    await shift.applyUpdates(updates);
 
-    const updates: Partial<Shift> = {};
-    if (body.start_at !== undefined) updates.startAt = nextStart;
-    if (body.end_at !== undefined) updates.endAt = nextEnd;
-    if (body.contact_person_name !== undefined) updates.contactPersonName = body.contact_person_name;
-    if (body.contact_person_phone !== undefined) updates.contactPersonPhone = body.contact_person_phone;
-    if (body.notes !== undefined) updates.notes = body.notes;
-    if (body.status !== undefined) {
-      if (!Object.values(ShiftStatus).includes(body.status)) {
-        throw new APIError(400, `status must be one of: ${Object.values(ShiftStatus).join(', ')}`);
-      }
-      updates.status = body.status as ShiftStatus;
-    }
-
-    await sequelize.transaction(async (transaction: Transaction) => {
-      if (Object.keys(updates).length) {
-        await shift.update(updates, { transaction });
-      }
-      // Replace staffing if provided.
-      if (body.staffing_requirements !== undefined) {
-        const reqs = await validateStaffingRequirements(body.staffing_requirements);
-        await ShiftStaffingRequirement.destroy({ where: { shiftId: shift.id }, transaction });
-        if (reqs.length) {
-          await ShiftStaffingRequirement.bulkCreate(
-            reqs.map((r) => ({
-              shiftId: shift.id,
-              industrySubCategoryId: r.industry_subcategory_id,
-              requiredCount: r.required_count ?? 1,
-            })) as never,
-            { transaction },
-          );
-        }
-      }
-    });
-
-    const fresh = await loadShiftWithIncludes(shift.id);
+    const fresh = await loadShiftWithIncludes(shift.id, req);
     await renderSuccess(res, fresh, ShiftEntity);
   }),
 );
@@ -296,14 +253,11 @@ router.patch(
 router.delete(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
-    const id = parseInt(req.params.id, 10);
-    if (Number.isNaN(id)) throw new APIError(400, 'Invalid shift id');
+    const id = parseShiftIdOr400(req.params.id);
     const shift = await assertOwnedShift(req, id);
-    if (shift.status === ShiftStatus.CANCELLED) {
-      throw new APIError(400, 'Shift already cancelled');
-    }
-    await shift.update({ status: ShiftStatus.CANCELLED });
-    const fresh = await loadShiftWithIncludes(shift.id);
+    await shift.cancel();
+
+    const fresh = await loadShiftWithIncludes(shift.id, req);
     await renderSuccess(res, fresh, ShiftEntity);
   }),
 );

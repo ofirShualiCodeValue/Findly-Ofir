@@ -45,6 +45,23 @@ const buildSequelizeMessage = (item: ValidationErrorItem): string => {
       return `Field '${field}' is required`;
     case 'unique violation':
       return `Field '${field}' must be unique`;
+    case 'validation error':
+      // Translate Sequelize's "Validation isEmail on contact_email failed"
+      // into a usable client-facing message. The validator name is in
+      // `item.validatorKey` (e.g. 'isEmail', 'is', 'len').
+      switch (item.validatorKey) {
+        case 'isEmail':
+          return `Field '${field}' must be a valid email address`;
+        case 'is':
+          return `Field '${field}' has an invalid format`;
+        case 'len':
+          return `Field '${field}' has an invalid length`;
+        case 'min':
+        case 'max':
+          return `Field '${field}' is out of range`;
+        default:
+          return item.message ?? `Invalid value for field '${field}'`;
+      }
     default:
       return item.message ?? `Invalid value for field '${field}'`;
   }

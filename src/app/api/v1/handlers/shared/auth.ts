@@ -1,12 +1,14 @@
-﻿import { Router, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
 import { SMSOTPCredentialSet } from '../../../../models/authentication/SMSOTPCredentialSet';
 import '../../../../../config/auth/spec';
-import { User, UserRole, UserStatus } from '../../../../models/User';
-import { EmployerProfile } from '../../../../models/EmployerProfile';
-import { EmployeeProfile } from '../../../../models/EmployeeProfile';
-import { signToken } from '../../../helpers/authentication/jwt';
+import { User, UserRole } from '../../../../models/User';
+import {
+  signToken,
+  signRegistrationToken,
+  verifyRegistrationToken,
+} from '../../../helpers/authentication/jwt';
 import config from '../../../../../../config';
 
 const router = Router();
@@ -17,17 +19,27 @@ function normalizePhone(raw: string): string {
   return raw.trim();
 }
 
+function userToResponse(user: User) {
+  return {
+    id: user.id,
+    full_name: user.fullName,
+    phone: user.phone,
+    email: user.email,
+    role: user.role,
+  };
+}
+
 /**
  * @openapi
  * /v1/shared/auth/sms/request:
  *   post:
  *     tags: [Authentication]
- *     summary: Request an SMS OTP code (signup or login)
+ *     summary: Send an SMS OTP to the phone (no user data required)
  *     description: |
- *       If the phone number is unknown, a new User is created with the provided role.
- *       If known, the existing user's role is used and `role` in the request body is ignored.
- *       The OTP is sent via the configured SMS gateway. In development the OTP is printed
- *       to the server console.
+ *       The endpoint never creates a User — it only ensures a credential
+ *       row exists for this phone and ships the OTP. User creation is
+ *       deferred until `POST /v1/shared/auth/register` after a successful
+ *       OTP verify, so we never persist half-baked accounts.
  *     security: []
  *     requestBody:
  *       required: true
@@ -38,87 +50,35 @@ function normalizePhone(raw: string): string {
  *             required: [phone]
  *             properties:
  *               phone: { type: string, example: '+972501234567' }
- *               role:
- *                 type: string
- *                 enum: [employer, employee]
- *                 description: Required when creating a new user
- *               full_name: { type: string, description: Required when creating a new user }
  *     responses:
  *       200:
  *         description: OTP dispatched
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 ok: { type: boolean }
- *                 is_new_user: { type: boolean }
- *       400: { $ref: '#/components/responses/ValidationError' }
  */
 router.post(
   '/sms/request',
   asyncHandler(async (req: Request, res: Response) => {
     const phone = normalizePhone(String(req.body?.phone ?? ''));
-    const role = req.body?.role as UserRole | undefined;
-    const fullName = (req.body?.full_name as string | undefined)?.trim();
-
     if (!phone) {
       throw new APIError(400, 'phone is required');
     }
 
-    let user = await User.findOne({ where: { phone } });
-    let isNewUser = false;
-
-    if (!user) {
-      if (!role || !Object.values(UserRole).includes(role)) {
-        throw new APIError(400, 'role is required for new users (employer or employee)');
-      }
-      user = await User.create({
-        phone,
-        fullName: fullName || phone,
-        role,
-        status: UserStatus.ACTIVE,
-      } as Partial<User>);
-      // Create the matching role-specific profile so PATCH /profile has a row to update
-      if (role === UserRole.EMPLOYER) {
-        await EmployerProfile.create({
-          userId: user.id,
-          businessName: fullName || phone,
-        } as Partial<EmployerProfile>);
-      } else {
-        await EmployeeProfile.create({
-          userId: user.id,
-        } as Partial<EmployeeProfile>);
-      }
-      isNewUser = true;
-    } else if (role && Object.values(UserRole).includes(role) && role !== user.role) {
-      // Existing accounts have a fixed role: a phone registered as employer
-      // can never log in as employee, and vice versa. Reject explicitly so
-      // the client can show "this phone is already registered as X" instead
-      // of silently logging the user in as the wrong role.
-      throw new APIError(409, 'Phone already registered with a different role', {
-        code: 'ROLE_MISMATCH',
-        existing_role: user.role,
-        requested_role: role,
-      });
-    }
-
-    // messageOptions is required to prevent a destructure crash inside core's
-    // SMSOTPCredentialSet.sendOtp (it does `{ messageOptions: { locale = ... } }`
-    // and crashes when messageOptions is undefined).
+    // messageOptions is required to prevent a destructure crash inside
+    // core's SMSOTPCredentialSet.sendOtp.
     const sendOpts = { messageOptions: {} };
 
     const [creds] = await SMSOTPCredentialSet.signup(OWNER_TYPE, phone, sendOpts);
-    if (!creds.ownerId) {
-      // First-time attach: this also triggers initial OTP send via core
-      await creds.attachTo(user.id, OWNER_TYPE, sendOpts);
-    } else {
-      // Existing credential: rotate authenticator secret + send fresh OTP
-      await creds.sendConfirmationToken(sendOpts);
-    }
 
-    // Dev convenience: surface the OTP in the response so the Flutter client
-    // doesn't have to scrape the server log. NEVER enable this in production.
+    // Fresh credentials are created with status='unassigned' (default).
+    // login() rejects 'unassigned' as suspended; transition to 'pending'
+    // so the next /sms/verify can promote it to 'active'. Existing
+    // credentials (returning user) keep their current status.
+    if (creds.status === 'unassigned') {
+      await creds.update({ status: 'pending' });
+    }
+    await creds.sendConfirmationToken(sendOpts);
+
+    // Dev convenience: surface the OTP in the response so the Flutter
+    // client doesn't have to scrape the server log. NEVER in production.
     const devCode = config.get('env') === 'development' ? creds.generateOtp() : undefined;
 
     res.json({
@@ -126,7 +86,6 @@ router.post(
       message: 'ok',
       data: {
         ok: true,
-        is_new_user: isNewUser,
         ...(devCode ? { dev_code: devCode } : {}),
       },
     });
@@ -138,35 +97,14 @@ router.post(
  * /v1/shared/auth/sms/verify:
  *   post:
  *     tags: [Authentication]
- *     summary: Verify SMS OTP and receive a JWT
+ *     summary: Verify SMS OTP
+ *     description: |
+ *       On success, returns either:
+ *         - `{ token, user, is_new_user: false }` for an existing account
+ *         - `{ registration_token, is_new_user: true }` if no user yet
+ *           exists for the phone — the client uses the registration_token
+ *           with `POST /v1/shared/auth/register` to finish signup.
  *     security: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [phone, code]
- *             properties:
- *               phone: { type: string }
- *               code: { type: string, example: '123456' }
- *     responses:
- *       200:
- *         description: Returns JWT token + user
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 token: { type: string }
- *                 user:
- *                   type: object
- *                   properties:
- *                     id: { type: integer }
- *                     full_name: { type: string }
- *                     phone: { type: string }
- *                     role: { type: string, enum: [employer, employee] }
- *       401: { $ref: '#/components/responses/Unauthorized' }
  */
 router.post(
   '/sms/verify',
@@ -188,25 +126,113 @@ router.post(
       throw err;
     }
 
-    const user = await User.findOne({ where: { phone } });
-    if (!user) {
-      throw new APIError(401, 'User not found');
+    const user = await User.findByPhone(phone);
+    if (user) {
+      const token = signToken({ sub: user.id, role: user.role });
+      res.json({
+        code: 200,
+        message: 'ok',
+        data: {
+          token,
+          user: userToResponse(user),
+          is_new_user: false,
+        },
+      });
+      return;
     }
 
-    const token = signToken({ sub: user.id, role: user.role });
-
+    // OTP verified, but no user exists for this phone yet. Hand the
+    // client a short-lived registration token so the next step can
+    // finish signup.
+    const registrationToken = signRegistrationToken(phone);
     res.json({
       code: 200,
       message: 'ok',
       data: {
-        token,
-        user: {
-          id: user.id,
-          full_name: user.fullName,
-          phone: user.phone,
-          email: user.email,
-          role: user.role,
-        },
+        is_new_user: true,
+        registration_token: registrationToken,
+      },
+    });
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/shared/auth/register:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Complete signup after OTP verification
+ *     description: |
+ *       Requires the `registration_token` from `/sms/verify` as the
+ *       Bearer credential. Creates the User and the role-specific
+ *       profile, binds the existing credential to the new user, and
+ *       returns a full session JWT.
+ *     security: [{ BearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [full_name, role]
+ *             properties:
+ *               full_name: { type: string }
+ *               role: { type: string, enum: [employer, employee] }
+ *     responses:
+ *       200:
+ *         description: Returns full JWT + user
+ */
+router.post(
+  '/register',
+  asyncHandler(async (req: Request, res: Response) => {
+    // Extract + verify the registration token directly here (we cannot
+    // reuse the regular `authenticate` middleware because it requires a
+    // standard JWT with `sub`).
+    const auth = req.headers.authorization;
+    if (!auth || !auth.toLowerCase().startsWith('bearer ')) {
+      throw new APIError(401, 'Missing or invalid Authorization header');
+    }
+    const token = auth.slice('bearer '.length).trim();
+    let payload;
+    try {
+      payload = verifyRegistrationToken(token);
+    } catch {
+      throw new APIError(401, 'Invalid or expired registration token');
+    }
+
+    const fullName = String(req.body?.full_name ?? '').trim();
+    const role = req.body?.role as UserRole | undefined;
+
+    if (!fullName) {
+      throw new APIError(400, 'full_name is required');
+    }
+    if (!role || !Object.values(UserRole).includes(role)) {
+      throw new APIError(400, 'role must be employer or employee');
+    }
+
+    const user = await User.completeSignup({
+      phone: payload.phone,
+      fullName,
+      role,
+    });
+
+    // Bind the (already OTP-verified) credential to the freshly-created
+    // user so future /sms/verify rounds can identify them by ownerId.
+    const creds = await SMSOTPCredentialSet.findOne({
+      where: { ownerType: OWNER_TYPE, sid: payload.phone },
+    });
+    if (creds) {
+      await creds.update({ ownerId: user.id });
+    }
+
+    const sessionToken = signToken({ sub: user.id, role: user.role });
+    res.json({
+      code: 200,
+      message: 'ok',
+      data: {
+        token: sessionToken,
+        user: userToResponse(user),
+        is_new_user: false,
       },
     });
   }),
@@ -217,7 +243,7 @@ router.post(
  * /v1/shared/auth/logout:
  *   post:
  *     tags: [Authentication]
- *     summary: Client-side logout (JWT is stateless ג€” clients should drop the token)
+ *     summary: Client-side logout (JWT is stateless — clients should drop the token)
  *     security: [{ BearerAuth: [] }]
  *     responses:
  *       200:
@@ -241,7 +267,7 @@ if (config.get('env') === 'development') {
         where: { ownerType: OWNER_TYPE, sid: phone },
       });
       if (!creds || !creds.token) {
-        throw new APIError(404, 'No active OTP found ג€” call /sms/request first');
+        throw new APIError(404, 'No active OTP found — call /sms/request first');
       }
       const code = creds.generateOtp();
       res.json({ code: 200, message: 'ok', data: { phone, code } });

@@ -13,7 +13,24 @@ import {
   CreatedAt,
   UpdatedAt,
 } from 'sequelize-typescript';
+import { Transaction } from 'sequelize';
+import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
 import { User } from './User';
+
+export interface EmployeeProfileUpdateInput {
+  idNumber?: string | null;
+  bankAccountNumber?: string | null;
+  bankBranch?: string | null;
+  bankName?: string | null;
+  dateOfBirth?: string | null;
+  workStatus?: WorkStatus | null;
+  baseHourlyRate?: string | null;
+  locationRangeKm?: number | null;
+  homeCity?: string | null;
+  homeLatitude?: string | null;
+  homeLongitude?: string | null;
+  avatarUrl?: string | null;
+}
 
 export enum WorkStatus {
   FREELANCER = 'freelancer',
@@ -91,4 +108,41 @@ export class EmployeeProfile extends Model {
 
   @BelongsTo(() => User)
   declare user?: User;
+
+  // =====================================================================
+  // Domain logic — partial updates + finder + avatar URL setter.
+  // =====================================================================
+
+  /**
+   * Find the profile that belongs to `userId`. Throws 404 if missing —
+   * which means the profile row wasn't created at signup, an invariant
+   * the SMS-OTP flow guarantees today.
+   */
+  static async findForUserOrThrow(
+    userId: number,
+    options?: { transaction?: Transaction },
+  ): Promise<EmployeeProfile> {
+    const profile = await EmployeeProfile.findOne({ where: { userId }, ...options });
+    if (!profile) throw new APIError(404, 'Employee profile not found');
+    return profile;
+  }
+
+  /**
+   * Apply a partial update. Only fields present in `input` are written —
+   * caller (handler) is responsible for input-shape checks (work_status
+   * enum, coordinate ranges, numeric bounds).
+   */
+  async applyUpdates(
+    input: EmployeeProfileUpdateInput,
+    options?: { transaction?: Transaction },
+  ): Promise<void> {
+    if (Object.keys(input).length) {
+      await this.update(input, options);
+    }
+  }
+
+  /** Persist a freshly-uploaded avatar URL. */
+  async setAvatarUrl(url: string): Promise<void> {
+    await this.update({ avatarUrl: url });
+  }
 }

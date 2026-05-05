@@ -36,6 +36,10 @@ jest.mock('../app/models/WorkerRating', () => ({
     findAll: jest.fn(),
     findOne: jest.fn(),
     create: jest.fn(),
+    // Active Record statics — default impls in beforeEach delegate to the
+    // lower-level mocks so existing assertions continue to drive behaviour.
+    upsertFor: jest.fn(),
+    summaryFor: jest.fn(),
   },
 }));
 
@@ -89,8 +93,92 @@ const { EventApplication } = require('../app/models/EventApplication');
 const { WorkerRating } = require('../app/models/WorkerRating');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { loadOwnedEvent } = require('../app/api/helpers/events');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { APIError } = require('@monkeytech/nodejs-core/api/errors/APIError');
 
 // ---------------------------- Helpers ----------------------------
+
+const TERMINAL = new Set([
+  'approved',
+  'rejected',
+  'cancelled_by_employee',
+  'cancelled_by_employer',
+]);
+
+/**
+ * Wraps a plain EventApplication-like stub with the Active Record instance
+ * methods the handler now calls (`decide`, `assertRateable`). Mirrors the
+ * real model so existing assertions on `update` still hold.
+ */
+function arApplication(stub: Record<string, unknown>): Record<string, unknown> {
+  const update =
+    (stub.update as jest.Mock | undefined) ?? jest.fn().mockResolvedValue(undefined);
+  stub.update = update;
+
+  stub.decide = jest.fn(async (by: { userId: number; status: string; note?: string | null }) => {
+    const isEscape = by.status === 'cancelled_by_employer';
+    if (!isEscape && TERMINAL.has(stub.status as string)) {
+      throw new APIError(400, `Cannot change status from ${stub.status}`);
+    }
+    await update({
+      status: by.status,
+      note: by.note ?? stub.note,
+      decidedAt: new Date(),
+      decidedByUserId: by.userId,
+    });
+  });
+
+  stub.assertRateable = jest.fn(() => {
+    if (stub.status !== 'approved') {
+      throw new APIError(409, 'Only approved applications can be rated');
+    }
+    const ev = stub.event as { endAt: Date } | undefined;
+    if (!ev || new Date(ev.endAt).getTime() > Date.now()) {
+      throw new APIError(409, 'The shift has not ended yet');
+    }
+  });
+
+  return stub;
+}
+
+beforeEach(() => {
+  // Default impls for the new WorkerRating statics — delegate to the
+  // lower-level `findOne` / `create` / `findAll` mocks so existing test
+  // assertions on those continue to drive behaviour.
+  (WorkerRating.upsertFor as jest.Mock).mockImplementation(
+    async (
+      application: { id: number; userId: number },
+      by: { ratedByUserId: number; rating: number; comment: string | null },
+    ) => {
+      const existing = await WorkerRating.findOne({
+        where: { eventApplicationId: application.id },
+      });
+      if (existing) {
+        await existing.update({ rating: by.rating, comment: by.comment });
+        return;
+      }
+      await WorkerRating.create({
+        workerUserId: application.userId,
+        ratedByUserId: by.ratedByUserId,
+        eventApplicationId: application.id,
+        rating: by.rating,
+        comment: by.comment,
+      });
+    },
+  );
+  (WorkerRating.summaryFor as jest.Mock).mockImplementation(async (workerUserId: number) => {
+    const ratings: Array<{ rating: number }> = await WorkerRating.findAll({
+      where: { workerUserId },
+      attributes: ['rating'],
+    });
+    if (!ratings.length) return { avg: null, count: 0 };
+    const sum = ratings.reduce((s, r) => s + r.rating, 0);
+    return {
+      avg: Math.round((sum / ratings.length) * 100) / 100,
+      count: ratings.length,
+    };
+  });
+});
 
 function buildApp(currentUser: { id: number; role: string } = { id: 99, role: 'employer' }) {
   const app = express();
@@ -135,12 +223,12 @@ describe('PUT /events/:eventId/applications/:applicationId/rating', () => {
   });
 
   it('rejects rating when application not approved', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       userId: 33,
       status: 'pending',
       event: { endAt: new Date(Date.now() - 60_000) }, // already ended
-    });
+    }));
 
     const app = buildApp();
     const res = await request(app)
@@ -151,12 +239,12 @@ describe('PUT /events/:eventId/applications/:applicationId/rating', () => {
   });
 
   it('rejects rating when shift has not ended yet', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       userId: 33,
       status: 'approved',
       event: { endAt: new Date(Date.now() + 3600_000) },
-    });
+    }));
 
     const app = buildApp();
     const res = await request(app)
@@ -167,12 +255,12 @@ describe('PUT /events/:eventId/applications/:applicationId/rating', () => {
   });
 
   it('creates a new rating on first call (idempotent path absent)', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       userId: 33,
       status: 'approved',
       event: { endAt: new Date(Date.now() - 60_000) },
-    });
+    }));
     (WorkerRating.findOne as jest.Mock).mockResolvedValue(null);
     (WorkerRating.create as jest.Mock).mockResolvedValue({ id: 1 });
     (WorkerRating.findAll as jest.Mock).mockResolvedValue([{ rating: 4 }, { rating: 5 }]);
@@ -197,12 +285,12 @@ describe('PUT /events/:eventId/applications/:applicationId/rating', () => {
 
   it('updates the existing rating on a repeat call (idempotency)', async () => {
     const updateMock = jest.fn().mockResolvedValue(undefined);
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       userId: 33,
       status: 'approved',
       event: { endAt: new Date(Date.now() - 60_000) },
-    });
+    }));
     (WorkerRating.findOne as jest.Mock).mockResolvedValue({
       id: 5,
       update: updateMock,
@@ -236,13 +324,13 @@ describe('PATCH /events/:eventId/applications/:applicationId  (decide)', () => {
 
   it('approves a pending application', async () => {
     const updateMock = jest.fn().mockResolvedValue(undefined);
-    const application = {
+    const application = arApplication({
       id: 22,
       eventId: 7,
       userId: 33,
       status: 'pending',
       update: updateMock,
-    };
+    });
     (EventApplication.findOne as jest.Mock).mockResolvedValue(application);
     (EventApplication.findByPk as jest.Mock).mockResolvedValue({
       ...application,
@@ -304,11 +392,11 @@ describe('terminal-state guards on PATCH (decide)', () => {
   });
 
   it('rejects approve on an already-approved application', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'approved',
       update: jest.fn(),
-    });
+    }));
 
     const app = buildApp();
     const res = await request(app)
@@ -320,11 +408,11 @@ describe('terminal-state guards on PATCH (decide)', () => {
   });
 
   it('rejects approve on a rejected application', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'rejected',
       update: jest.fn(),
-    });
+    }));
 
     const app = buildApp();
     const res = await request(app)
@@ -336,11 +424,11 @@ describe('terminal-state guards on PATCH (decide)', () => {
   });
 
   it('rejects approve on an application the worker already cancelled', async () => {
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'cancelled_by_employee',
       update: jest.fn(),
-    });
+    }));
 
     const app = buildApp();
     const res = await request(app)
@@ -352,11 +440,11 @@ describe('terminal-state guards on PATCH (decide)', () => {
 
   it('still allows the employer to record cancellation_by_employer at any state', async () => {
     const updateMock = jest.fn().mockResolvedValue(undefined);
-    (EventApplication.findOne as jest.Mock).mockResolvedValue({
+    (EventApplication.findOne as jest.Mock).mockResolvedValue(arApplication({
       id: 22,
       status: 'approved',
       update: updateMock,
-    });
+    }));
     (EventApplication.findByPk as jest.Mock).mockResolvedValue({
       id: 22,
       status: 'cancelled_by_employer',

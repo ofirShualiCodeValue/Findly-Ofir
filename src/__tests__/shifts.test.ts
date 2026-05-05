@@ -10,7 +10,18 @@ import { getErrorHandler } from '@monkeytech/nodejs-core/network/errors/middlewa
 import { apiDataMapper } from '../app/api/helpers/errors';
 
 jest.mock('../app/models/Shift', () => ({
-  Shift: { findByPk: jest.fn(), findOne: jest.fn(), findAll: jest.fn(), create: jest.fn() },
+  Shift: {
+    findByPk: jest.fn(),
+    findOne: jest.fn(),
+    findAll: jest.fn(),
+    create: jest.fn(),
+    // Active Record statics — default impls in beforeEach delegate to the
+    // lower-level mocks so existing assertions on Shift.create / FK lookups
+    // continue to drive behaviour.
+    createForEvent: jest.fn(),
+    assertValidDuration: jest.fn(),
+    assertStaffingFKsExist: jest.fn(),
+  },
   ShiftStatus: { ACTIVE: 'active', CANCELLED: 'cancelled' },
 }));
 jest.mock('../app/models/ShiftStaffingRequirement', () => ({
@@ -70,10 +81,39 @@ function buildApp() {
   return app;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { APIError } = require('@monkeytech/nodejs-core/api/errors/APIError');
+
+const MIN_SHIFT_HOURS = 6;
+const MAX_SHIFT_HOURS = 12;
+
 beforeEach(() => {
   (loadOwnedEvent as jest.Mock).mockResolvedValue({ id: 7, createdByUserId: 99 });
   (Shift.create as jest.Mock).mockResolvedValue({ id: 50 });
   (Shift.findByPk as jest.Mock).mockResolvedValue({ id: 50 });
+
+  // Default impls for the new Active Record statics — mirror the real
+  // model so the existing tests of the duration rule + FK existence
+  // continue to drive behaviour without changes.
+  (Shift.assertValidDuration as jest.Mock).mockImplementation((startAt: Date, endAt: Date) => {
+    if (endAt <= startAt) throw new APIError(400, 'end_at must be after start_at');
+    const hours = (endAt.getTime() - startAt.getTime()) / (1000 * 60 * 60);
+    if (hours < MIN_SHIFT_HOURS || hours > MAX_SHIFT_HOURS) {
+      throw new APIError(400, 'Shift duration must be between 6 and 12 hours', {
+        code: 'SHIFT_DURATION_INVALID',
+        min_hours: MIN_SHIFT_HOURS,
+        max_hours: MAX_SHIFT_HOURS,
+        actual_hours: Math.round(hours * 100) / 100,
+      });
+    }
+  });
+  (Shift.assertStaffingFKsExist as jest.Mock).mockResolvedValue(undefined);
+  (Shift.createForEvent as jest.Mock).mockImplementation(
+    async (eventId: number, input: { startAt: Date; endAt: Date }) => {
+      (Shift.assertValidDuration as jest.Mock)(input.startAt, input.endAt);
+      return Shift.create({ eventId, ...input, status: 'active' });
+    },
+  );
 });
 
 // Helper: build start/end times N hours apart, anchored on a stable date so
