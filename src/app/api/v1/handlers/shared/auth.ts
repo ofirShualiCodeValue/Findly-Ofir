@@ -263,10 +263,15 @@ if (config.get('env') === 'development') {
     asyncHandler(async (req: Request, res: Response) => {
       const phone = String(req.query.phone ?? '').trim();
       if (!phone) throw new APIError(400, 'phone query param required');
+      // The credential is stored under the SDK's normalized form
+      // (e.g. '+972 50 000 0050' via libphonenumber's formatInternational).
+      // The raw input '+972500000050' won't match — go through formatSid so
+      // the lookup matches whatever /sms/request persisted.
+      const formattedSid = SMSOTPCredentialSet.formatSid(phone, 'IL');
       const creds = await SMSOTPCredentialSet.findOne({
-        where: { ownerType: OWNER_TYPE, sid: phone },
+        where: { ownerType: OWNER_TYPE, sid: formattedSid },
       });
-      if (!creds || !creds.token) {
+      if (!creds) {
         throw new APIError(404, 'No active OTP found — call /sms/request first');
       }
       const code = creds.generateOtp();

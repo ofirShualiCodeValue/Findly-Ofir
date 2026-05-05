@@ -203,36 +203,18 @@ describe('POST /v1/shared/auth/logout', () => {
 });
 
 describe('GET /v1/shared/auth/dev/last-otp (dev-only)', () => {
-  // FINDING: This endpoint is broken with the project's MockSMSGateway.
-  //   The handler gates 404 on `!creds.token`, but `token` is only
-  //   populated by 2-step verification gateways (createVerification +
-  //   completeVerification). MockSMSGateway only implements `sendMessage`
-  //   so `creds.token` stays NULL in DB after /sms/request, and the
-  //   endpoint always returns 404 — even immediately after /sms/request.
-  //   `generateOtp()` is TOTP-based on `creds.secret`, so the endpoint
-  //   COULD work if the handler dropped the `!creds.token` check.
-  //   See: src/app/api/v1/handlers/shared/auth.ts:269
-  //   The Flutter client doesn't depend on this endpoint (it uses dev_code
-  //   from /sms/request), so this is a low-priority fix.
-  it.skip('returns the last OTP for a phone (BROKEN — see comment above)', async () => {
+  it('returns the last OTP for a phone after /sms/request', async () => {
     const phone = '+972500000050';
-    await requestOtp(phone);
+    const requestedCode = await requestOtp(phone);
     const res = await api()
       .get('/v1/shared/auth/dev/last-otp')
       .query({ phone });
     expect(res.status).toBe(200);
     expect(res.body.data.phone).toBe(phone);
     expect(typeof res.body.data.code).toBe('string');
-  });
-
-  // Documents the current (broken) behaviour so we'll notice if it changes.
-  it('currently returns 404 even after /sms/request (mock-gateway quirk)', async () => {
-    const phone = '+972500000050';
-    await requestOtp(phone);
-    const res = await api()
-      .get('/v1/shared/auth/dev/last-otp')
-      .query({ phone });
-    expect(res.status).toBe(404);
+    // The code from /dev/last-otp should match the dev_code returned by
+    // /sms/request — both derive from the same TOTP secret.
+    expect(res.body.data.code).toBe(requestedCode);
   });
 
   it('returns 400 when phone query param is missing', async () => {
