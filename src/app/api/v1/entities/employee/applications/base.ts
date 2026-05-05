@@ -26,6 +26,12 @@ export class EmployeeApplicationEntity extends Entity<EventApplication> {
   get reportedHours() {
     return this.instance.reportedHours;
   }
+  get reportedStartAt() {
+    return this.instance.reportedStartAt;
+  }
+  get reportedEndAt() {
+    return this.instance.reportedEndAt;
+  }
   get reportedAt() {
     return this.instance.reportedAt;
   }

@@ -88,6 +88,14 @@ export class EventApplication extends Model {
 
   @AllowNull(true)
   @Column(DataType.DATE)
+  declare reportedStartAt: Date | null;
+
+  @AllowNull(true)
+  @Column(DataType.DATE)
+  declare reportedEndAt: Date | null;
+
+  @AllowNull(true)
+  @Column(DataType.DATE)
   declare reportedAt: Date | null;
 
   @AllowNull(false)
@@ -241,14 +249,18 @@ export class EventApplication extends Model {
   }
 
   /**
-   * Worker reports their actual worked hours after the shift ends. Only
-   * allowed on approved applications whose event has ended, and whose
+   * Worker reports the actual time range they worked after the shift ends.
+   * Only allowed on approved applications whose event has ended, and whose
    * hours haven't already been approved. Sets `hoursStatus` to
    * `pending_approval` until the employer confirms.
    *
+   * `reportedHours` is computed from the time range and stored alongside
+   * for consumers (Flutter UI, earnings rollup) that don't want to
+   * re-derive it on every read.
+   *
    * Caller is expected to have eager-loaded `event`.
    */
-  async reportHours(hours: number): Promise<void> {
+  async reportShiftTimes(input: { startAt: Date; endAt: Date }): Promise<void> {
     if (!this.isApproved) {
       throw new APIError(409, 'Only approved applications can report hours');
     }
@@ -258,27 +270,80 @@ export class EventApplication extends Model {
     if (!this.event || new Date(this.event.endAt).getTime() > Date.now()) {
       throw new APIError(409, 'The shift has not ended yet');
     }
+    EventApplication.assertShiftRange(input.startAt, input.endAt);
+
     await this.update({
-      reportedHours: String(hours),
+      reportedStartAt: input.startAt,
+      reportedEndAt: input.endAt,
+      reportedHours: EventApplication.computeHours(input.startAt, input.endAt),
       reportedAt: new Date(),
       hoursStatus: HoursStatus.PENDING_APPROVAL,
     });
   }
 
   /**
-   * Employer decides on the worker's reported hours: approves them as the
-   * final billable amount, or rejects them (worker can re-submit). Only
-   * allowed when the worker has actually reported hours that are still
-   * waiting on the employer.
+   * Employer decides on the worker's reported hours. Three modes:
+   *   - approve as-is:  decideHours({ status: 'approved' })
+   *   - approve + edit: decideHours({ status: 'approved', startAt, endAt })
+   *   - reject:         decideHours({ status: 'rejected' })
+   *
+   * "Edit" overwrites the reported time range with whatever the employer
+   * chose, so the row reflects the final billable times after the call.
    */
-  async decideHours(status: HoursStatus.APPROVED | HoursStatus.REJECTED): Promise<void> {
+  async decideHours(input: {
+    status: HoursStatus.APPROVED | HoursStatus.REJECTED;
+    startAt?: Date;
+    endAt?: Date;
+  }): Promise<void> {
     if (this.hoursStatus !== HoursStatus.PENDING_APPROVAL) {
       throw new APIError(
         409,
         `Cannot decide hours from status '${this.hoursStatus}' — must be 'pending_approval'`,
       );
     }
-    await this.update({ hoursStatus: status });
+
+    const hasEdit = input.startAt !== undefined || input.endAt !== undefined;
+    if (hasEdit && input.status !== HoursStatus.APPROVED) {
+      throw new APIError(400, 'Time edits are only allowed when status=approved');
+    }
+    if (hasEdit && (input.startAt === undefined || input.endAt === undefined)) {
+      throw new APIError(400, 'Both start_at and end_at are required when editing times');
+    }
+
+    if (hasEdit) {
+      EventApplication.assertShiftRange(input.startAt!, input.endAt!);
+      await this.update({
+        reportedStartAt: input.startAt!,
+        reportedEndAt: input.endAt!,
+        reportedHours: EventApplication.computeHours(input.startAt!, input.endAt!),
+        hoursStatus: input.status,
+      });
+      return;
+    }
+    await this.update({ hoursStatus: input.status });
+  }
+
+  /**
+   * Validate a reported shift range. End must be strictly after start, and
+   * the total duration must be sensible for a single shift (≤ 24h).
+   */
+  private static assertShiftRange(startAt: Date, endAt: Date): void {
+    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
+      throw new APIError(400, 'Invalid start_at / end_at');
+    }
+    if (endAt.getTime() <= startAt.getTime()) {
+      throw new APIError(400, 'end_at must be after start_at');
+    }
+    const hours = (endAt.getTime() - startAt.getTime()) / 3_600_000;
+    if (hours > 24) {
+      throw new APIError(400, 'Reported shift cannot exceed 24 hours');
+    }
+  }
+
+  /** Decimal-string hours, rounded to 2 decimals. */
+  private static computeHours(startAt: Date, endAt: Date): string {
+    const hours = (endAt.getTime() - startAt.getTime()) / 3_600_000;
+    return (Math.round(hours * 100) / 100).toFixed(2);
   }
 
   /**

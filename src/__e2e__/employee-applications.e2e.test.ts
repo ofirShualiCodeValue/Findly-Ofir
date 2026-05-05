@@ -173,35 +173,83 @@ describe('POST /v1/employee/applications/:id/report-hours', () => {
       .send({ status: 'approved' });
   });
 
+  // Times that fall WITHIN "yesterday's shift" window — used after
+  // setEventEndedInPast() pushes the event into the past.
+  const yesterday = (h: number, m = 0): Date => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 1);
+    d.setUTCHours(h, m, 0, 0);
+    return d;
+  };
+
   it('rejects reporting before the shift has ended', async () => {
     const res = await employee.request()
       .post(`/v1/employee/applications/${applicationId}/report-hours`)
-      .send({ hours: 8 });
+      .send({
+        start_at: yesterday(14).toISOString(),
+        end_at: yesterday(22).toISOString(),
+      });
     expect(res.status).toBe(409);
   });
 
-  it('accepts report after shift ended; sets hours_status=pending_approval', async () => {
+  it('accepts report after shift ended; sets hours_status=pending_approval and computes reported_hours', async () => {
     await setEventEndedInPast();
+    const start = yesterday(14, 10);  // arrived 10 min late
+    const end = yesterday(22, 15);    // left 15 min late
     const res = await employee.request()
       .post(`/v1/employee/applications/${applicationId}/report-hours`)
-      .send({ hours: 8 });
+      .send({ start_at: start.toISOString(), end_at: end.toISOString() });
     expect(res.status).toBe(200);
     expect(res.body.data.hours_status).toBe('pending_approval');
-    expect(Number(res.body.data.reported_hours)).toBe(8);
+    expect(Number(res.body.data.reported_hours)).toBeCloseTo(8.08, 2);
+    expect(new Date(res.body.data.reported_start_at).toISOString()).toBe(start.toISOString());
+    expect(new Date(res.body.data.reported_end_at).toISOString()).toBe(end.toISOString());
   });
 
-  it('rejects hours outside [0, 24]', async () => {
+  it('rejects when end_at is not after start_at', async () => {
     await setEventEndedInPast();
     const res = await employee.request()
       .post(`/v1/employee/applications/${applicationId}/report-hours`)
-      .send({ hours: 30 });
+      .send({
+        start_at: yesterday(22).toISOString(),
+        end_at: yesterday(14).toISOString(),
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects shift longer than 24 hours', async () => {
+    await setEventEndedInPast();
+    const start = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const end = new Date(Date.now() - 1 * 60 * 60 * 1000); // 47h apart
+    const res = await employee.request()
+      .post(`/v1/employee/applications/${applicationId}/report-hours`)
+      .send({ start_at: start.toISOString(), end_at: end.toISOString() });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects when start_at or end_at is missing', async () => {
+    await setEventEndedInPast();
+    const res = await employee.request()
+      .post(`/v1/employee/applications/${applicationId}/report-hours`)
+      .send({ start_at: yesterday(14).toISOString() });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects malformed timestamps', async () => {
+    await setEventEndedInPast();
+    const res = await employee.request()
+      .post(`/v1/employee/applications/${applicationId}/report-hours`)
+      .send({ start_at: 'not-a-date', end_at: 'also-not' });
     expect(res.status).toBe(400);
   });
 
   it('returns 404 for a non-existent application', async () => {
     const res = await employee.request()
       .post('/v1/employee/applications/99999/report-hours')
-      .send({ hours: 8 });
+      .send({
+        start_at: yesterday(14).toISOString(),
+        end_at: yesterday(22).toISOString(),
+      });
     expect(res.status).toBe(404);
   });
 });

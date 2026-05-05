@@ -165,9 +165,11 @@ describe('Cross-employee application isolation', () => {
   });
 
   it('Employee B cannot report hours on Employee A\'s application', async () => {
+    const start = new Date(Date.now() - 8 * 3600_000);
+    const end = new Date();
     const res = await employeeB.request()
       .post(`/v1/employee/applications/${appByEmployeeA}/report-hours`)
-      .send({ hours: 8 });
+      .send({ start_at: start.toISOString(), end_at: end.toISOString() });
     expect(res.status).toBe(404);
   });
 });

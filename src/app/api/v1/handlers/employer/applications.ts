@@ -65,6 +65,14 @@ function parseHoursDecisionOr400(raw: unknown): HoursStatus.APPROVED | HoursStat
   return raw as HoursStatus.APPROVED | HoursStatus.REJECTED;
 }
 
+function parseHoursDateOr400(raw: unknown, field: string): Date {
+  const d = new Date(raw as string);
+  if (Number.isNaN(d.getTime())) {
+    throw new APIError(400, `Invalid ${field}`);
+  }
+  return d;
+}
+
 /**
  * @openapi
  * /v1/employer/events/{eventId}/applications:
@@ -283,12 +291,16 @@ router.put(
  * /v1/employer/events/{eventId}/applications/{applicationId}/hours:
  *   patch:
  *     tags: [Employer Applications]
- *     summary: Approve or reject the worker's reported hours
+ *     summary: Approve, edit-and-approve, or reject the worker's reported hours
  *     description: |
- *       Allowed only when `hours_status` is `pending_approval` (i.e. the
- *       worker has reported hours and is waiting for the employer's
- *       decision). Sets `hours_status` to `approved` (final billable amount)
- *       or `rejected` (worker can re-submit).
+ *       Three modes:
+ *       1. `{ status: 'approved' }` — accept the worker's reported time range as-is.
+ *       2. `{ status: 'approved', start_at, end_at }` — overwrite the time range
+ *          with the employer's correction, then mark as approved (the final
+ *          billable amount).
+ *       3. `{ status: 'rejected' }` — reject; the worker can re-submit.
+ *
+ *       Allowed only when `hours_status` is `pending_approval`.
  *     security: [{ BearerAuth: [] }]
  *     parameters:
  *       - in: path
@@ -307,7 +319,9 @@ router.put(
  *             type: object
  *             required: [status]
  *             properties:
- *               status: { type: string, enum: [approved, rejected] }
+ *               status:   { type: string, enum: [approved, rejected] }
+ *               start_at: { type: string, format: date-time }
+ *               end_at:   { type: string, format: date-time }
  *     responses:
  *       200: { description: Hours decision recorded }
  *       400: { $ref: '#/components/responses/ValidationError' }
@@ -326,7 +340,14 @@ router.patch(
     });
     if (!application) throw new APIError(404, 'Application not found');
 
-    await application.decideHours(status);
+    const startAt = req.body?.start_at !== undefined
+      ? parseHoursDateOr400(req.body.start_at, 'start_at')
+      : undefined;
+    const endAt = req.body?.end_at !== undefined
+      ? parseHoursDateOr400(req.body.end_at, 'end_at')
+      : undefined;
+
+    await application.decideHours({ status, startAt, endAt });
 
     const fresh = await EventApplication.findByPk(application.id, {
       include: ApplicationBaseEntity.includes(req),

@@ -211,24 +211,83 @@ describe('PUT /v1/employer/events/:eventId/applications/:applicationId/rating', 
 
 describe('PATCH /v1/employer/events/:eventId/applications/:applicationId/hours', () => {
   // Drives the `hours_status` lifecycle: pending_approval → approved | rejected.
-  // Setup: approve the application, end the event, employee reports hours.
+  // Setup: approve the application, end the event, employee reports a time range.
+  const yesterday = (h: number, m = 0): Date => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 1);
+    d.setUTCHours(h, m, 0, 0);
+    return d;
+  };
+  const reportedStart = yesterday(14);
+  const reportedEnd = yesterday(22, 30); // 8.5 hours
+
   beforeEach(async () => {
     await approve(applicationId);
     await setEventEndedInPast();
     const reportRes = await employee.request()
       .post(`/v1/employee/applications/${applicationId}/report-hours`)
-      .send({ hours: 8.5 });
+      .send({
+        start_at: reportedStart.toISOString(),
+        end_at: reportedEnd.toISOString(),
+      });
     expect(reportRes.status).toBe(200);
     expect(reportRes.body.data.hours_status).toBe('pending_approval');
   });
 
-  it('approves pending hours', async () => {
+  it('approves pending hours as-is (no edit)', async () => {
     const res = await employer.request()
       .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
       .send({ status: 'approved' });
     expect(res.status).toBe(200);
     expect(res.body.data.hours_status).toBe('approved');
     expect(Number(res.body.data.reported_hours)).toBe(8.5);
+    expect(new Date(res.body.data.reported_start_at).toISOString()).toBe(reportedStart.toISOString());
+  });
+
+  it('approves with employer-edited times (overrides what worker reported)', async () => {
+    const editedStart = yesterday(14, 30); // employer says worker actually came at 14:30
+    const editedEnd = yesterday(22, 0);    // and left at 22:00 — 7.5 hours
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({
+        status: 'approved',
+        start_at: editedStart.toISOString(),
+        end_at: editedEnd.toISOString(),
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.data.hours_status).toBe('approved');
+    expect(Number(res.body.data.reported_hours)).toBe(7.5);
+    expect(new Date(res.body.data.reported_start_at).toISOString()).toBe(editedStart.toISOString());
+    expect(new Date(res.body.data.reported_end_at).toISOString()).toBe(editedEnd.toISOString());
+  });
+
+  it('rejects edit with end before start', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({
+        status: 'approved',
+        start_at: yesterday(22).toISOString(),
+        end_at: yesterday(14).toISOString(),
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects edit when only one of start/end is provided', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'approved', start_at: yesterday(14).toISOString() });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects edit when status=rejected (edits only allowed on approval)', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({
+        status: 'rejected',
+        start_at: yesterday(14).toISOString(),
+        end_at: yesterday(22).toISOString(),
+      });
+    expect(res.status).toBe(400);
   });
 
   it('rejects pending hours (worker can re-submit)', async () => {
