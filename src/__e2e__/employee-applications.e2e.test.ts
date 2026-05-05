@@ -187,9 +187,6 @@ describe('POST /v1/employee/applications/:id/report-hours', () => {
       .send({ hours: 8 });
     expect(res.status).toBe(200);
     expect(res.body.data.hours_status).toBe('pending_approval');
-    // EmployeeApplicationEntity exposes the field as `reported_hours`
-    // (snake_case of the entity's `reportedHours` getter), NOT
-    // `hours_submitted` as the OpenAPI doc/explorer mapping suggested.
     expect(Number(res.body.data.reported_hours)).toBe(8);
   });
 
