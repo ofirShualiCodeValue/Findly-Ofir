@@ -11,6 +11,7 @@ import {
 } from '../../../../models/EmployerProfile';
 import { EmployerProfileFullEntity } from '../../entities/employer/profile/full';
 import { logoUpload, publicLogoUrl } from '../../../helpers/uploads/multer';
+import { assertCoord } from '../../../helpers/validation';
 
 const router = Router();
 
@@ -37,7 +38,9 @@ function parseProfileBody(body: Record<string, unknown>): {
   }
 
   const profile: EmployerProfileUpdateInput = {};
-  const map: Record<string, keyof EmployerProfileUpdateInput> = {
+  // String fields — passed through untouched. Coords are handled separately
+  // below so they go through bounds validation.
+  const stringFieldMap: Record<string, keyof EmployerProfileUpdateInput> = {
     business_name: 'businessName',
     owner_name: 'ownerName',
     vat_number: 'vatNumber',
@@ -45,13 +48,17 @@ function parseProfileBody(body: Record<string, unknown>): {
     contact_phone: 'contactPhone',
     address: 'address',
     logo_url: 'logoUrl',
-    latitude: 'latitude',
-    longitude: 'longitude',
   };
-  for (const [snake, camel] of Object.entries(map)) {
+  for (const [snake, camel] of Object.entries(stringFieldMap)) {
     if (body[snake] !== undefined) {
       (profile as Record<string, unknown>)[camel] = body[snake];
     }
+  }
+  if (body.latitude !== undefined) {
+    profile.latitude = String(assertCoord(body.latitude, 'latitude', 90));
+  }
+  if (body.longitude !== undefined) {
+    profile.longitude = String(assertCoord(body.longitude, 'longitude', 180));
   }
   return { account, profile };
 }

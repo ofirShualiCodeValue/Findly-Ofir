@@ -15,6 +15,7 @@ import { EventApplication } from '../../../../models/EventApplication';
 import { EmployeeProfileFullEntity } from '../../entities/employee/profile/full';
 import { avatarUpload, publicAvatarUrl } from '../../../helpers/uploads/multer';
 import { geocodeIsraeliCity } from '../../../helpers/geocoding';
+import { assertCoord } from '../../../helpers/validation';
 
 const router = Router();
 
@@ -67,14 +68,6 @@ function assertWorkStatus(value: unknown): WorkStatus {
     throw new APIError(400, `work_status must be one of: ${Object.values(WorkStatus).join(', ')}`);
   }
   return value as WorkStatus;
-}
-
-function assertCoord(value: unknown, field: string, range: number): number {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < -range || n > range) {
-    throw new APIError(400, `${field} must be a number between -${range} and ${range}`);
-  }
-  return n;
 }
 
 function assertNonNegativeNumber(value: unknown, field: string): number {

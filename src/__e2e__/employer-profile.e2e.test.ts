@@ -97,21 +97,33 @@ describe('PATCH /v1/employer/profile', () => {
     expect(res.status).toBe(200);
   });
 
-  // FINDING: Neither the handler nor EmployerProfile.applyUpdates validates
-  //   latitude/longitude ranges. Out-of-range values (e.g. lat=200, lng=-300)
-  //   are silently persisted. The DB column is a string so it accepts any
-  //   numeric input. Recommend adding bounds checks in the handler.
-  it('CURRENTLY accepts out-of-range latitude (no validation — finding)', async () => {
+  it('rejects out-of-range latitude', async () => {
     const res = await employer.request()
       .patch('/v1/employer/profile')
       .send({ latitude: 200 });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/latitude/);
   });
 
-  it('CURRENTLY accepts out-of-range longitude (no validation — finding)', async () => {
+  it('rejects out-of-range longitude', async () => {
     const res = await employer.request()
       .patch('/v1/employer/profile')
       .send({ longitude: -300 });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/longitude/);
+  });
+
+  it('rejects non-numeric latitude/longitude', async () => {
+    const res = await employer.request()
+      .patch('/v1/employer/profile')
+      .send({ latitude: 'not-a-number' });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts valid in-range coordinates', async () => {
+    const res = await employer.request()
+      .patch('/v1/employer/profile')
+      .send({ latitude: 32.0853, longitude: 34.7818 });
     expect(res.status).toBe(200);
   });
 });
