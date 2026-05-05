@@ -4,7 +4,11 @@ import { asyncHandler } from '@monkeytech/nodejs-core/network/utils/routing';
 import { renderSuccess } from '@monkeytech/nodejs-core/api/helpers/response';
 import { APIError } from '@monkeytech/nodejs-core/api/errors/APIError';
 import { Paginator } from '@monkeytech/nodejs-core/api/Paginator';
-import { EventApplication, EventApplicationStatus } from '../../../../models/EventApplication';
+import {
+  EventApplication,
+  EventApplicationStatus,
+  HoursStatus,
+} from '../../../../models/EventApplication';
 import { WorkerRating } from '../../../../models/WorkerRating';
 import { Event } from '../../../../models/Event';
 import { User } from '../../../../models/User';
@@ -46,6 +50,19 @@ function parseDecisionStatusOr400(raw: unknown): EventApplicationStatus {
     );
   }
   return raw as EventApplicationStatus;
+}
+
+/** Hours can be approved or rejected by the employer; nothing else. */
+const HOURS_DECISIONS: ReadonlySet<HoursStatus> = new Set([
+  HoursStatus.APPROVED,
+  HoursStatus.REJECTED,
+]);
+
+function parseHoursDecisionOr400(raw: unknown): HoursStatus.APPROVED | HoursStatus.REJECTED {
+  if (!raw || !HOURS_DECISIONS.has(raw as HoursStatus)) {
+    throw new APIError(400, 'status must be one of: approved, rejected');
+  }
+  return raw as HoursStatus.APPROVED | HoursStatus.REJECTED;
 }
 
 /**
@@ -258,6 +275,63 @@ router.put(
         worker_rating: summary,
       },
     });
+  }),
+);
+
+/**
+ * @openapi
+ * /v1/employer/events/{eventId}/applications/{applicationId}/hours:
+ *   patch:
+ *     tags: [Employer Applications]
+ *     summary: Approve or reject the worker's reported hours
+ *     description: |
+ *       Allowed only when `hours_status` is `pending_approval` (i.e. the
+ *       worker has reported hours and is waiting for the employer's
+ *       decision). Sets `hours_status` to `approved` (final billable amount)
+ *       or `rejected` (worker can re-submit).
+ *     security: [{ BearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: eventId
+ *         required: true
+ *         schema: { type: integer }
+ *       - in: path
+ *         name: applicationId
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status: { type: string, enum: [approved, rejected] }
+ *     responses:
+ *       200: { description: Hours decision recorded }
+ *       400: { $ref: '#/components/responses/ValidationError' }
+ *       404: { $ref: '#/components/responses/NotFound' }
+ *       409: { description: Hours are not pending approval }
+ */
+router.patch(
+  '/:applicationId/hours',
+  asyncHandler(async (req: Request, res: Response) => {
+    const event = await loadOwnedEvent(req, req.params.eventId);
+    const applicationId = parseApplicationIdOr400(req.params.applicationId);
+    const status = parseHoursDecisionOr400(req.body?.status);
+
+    const application = await EventApplication.findOne({
+      where: { id: applicationId, eventId: event.id },
+    });
+    if (!application) throw new APIError(404, 'Application not found');
+
+    await application.decideHours(status);
+
+    const fresh = await EventApplication.findByPk(application.id, {
+      include: ApplicationBaseEntity.includes(req),
+    });
+    await renderSuccess(res, fresh, ApplicationBaseEntity);
   }),
 );
 

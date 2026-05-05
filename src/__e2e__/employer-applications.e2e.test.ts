@@ -208,3 +208,95 @@ describe('PUT /v1/employer/events/:eventId/applications/:applicationId/rating', 
     expect(res.status).toBe(409);
   });
 });
+
+describe('PATCH /v1/employer/events/:eventId/applications/:applicationId/hours', () => {
+  // Drives the `hours_status` lifecycle: pending_approval → approved | rejected.
+  // Setup: approve the application, end the event, employee reports hours.
+  beforeEach(async () => {
+    await approve(applicationId);
+    await setEventEndedInPast();
+    const reportRes = await employee.request()
+      .post(`/v1/employee/applications/${applicationId}/report-hours`)
+      .send({ hours: 8.5 });
+    expect(reportRes.status).toBe(200);
+    expect(reportRes.body.data.hours_status).toBe('pending_approval');
+  });
+
+  it('approves pending hours', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'approved' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.hours_status).toBe('approved');
+    expect(Number(res.body.data.reported_hours)).toBe(8.5);
+  });
+
+  it('rejects pending hours (worker can re-submit)', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'rejected' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.hours_status).toBe('rejected');
+  });
+
+  it('returns 400 for an invalid status value', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'maybe' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when status is missing', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects pending_approval as a target status (only approved/rejected allowed)', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'pending_approval' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 409 once hours have already been approved', async () => {
+    await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'approved' });
+    const second = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'rejected' });
+    expect(second.status).toBe(409);
+  });
+
+  it('returns 404 for a non-existent application', async () => {
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/99999/hours`)
+      .send({ status: 'approved' });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when the event belongs to another employer', async () => {
+    const other = await signupAsEmployer('+972500006005', 'Other');
+    const res = await other.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'approved' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('PATCH .../hours — when worker has not reported yet', () => {
+  // Sanity: the endpoint must reject when hours_status is still 'not_reported'.
+  // Separate describe because it skips the "worker reports hours" beforeEach.
+  it('returns 409 if no hours have been reported yet', async () => {
+    await approve(applicationId);
+    await setEventEndedInPast();
+    // Note: deliberately NOT calling /report-hours — hours_status stays 'not_reported'.
+    const res = await employer.request()
+      .patch(`/v1/employer/events/${eventId}/applications/${applicationId}/hours`)
+      .send({ status: 'approved' });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/pending_approval/);
+  });
+});

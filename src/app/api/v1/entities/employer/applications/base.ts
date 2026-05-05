@@ -33,6 +33,18 @@ export class ApplicationBaseEntity extends Entity<EventApplication> {
     return this.instance.proposedAmount;
   }
 
+  get reportedHours() {
+    return this.instance.reportedHours;
+  }
+
+  get reportedAt() {
+    return this.instance.reportedAt;
+  }
+
+  get hoursStatus() {
+    return this.instance.hoursStatus;
+  }
+
   get applicant() {
     const u = this.instance.applicant;
     if (!u) return null;

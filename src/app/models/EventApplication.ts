@@ -266,6 +266,22 @@ export class EventApplication extends Model {
   }
 
   /**
+   * Employer decides on the worker's reported hours: approves them as the
+   * final billable amount, or rejects them (worker can re-submit). Only
+   * allowed when the worker has actually reported hours that are still
+   * waiting on the employer.
+   */
+  async decideHours(status: HoursStatus.APPROVED | HoursStatus.REJECTED): Promise<void> {
+    if (this.hoursStatus !== HoursStatus.PENDING_APPROVAL) {
+      throw new APIError(
+        409,
+        `Cannot decide hours from status '${this.hoursStatus}' — must be 'pending_approval'`,
+      );
+    }
+    await this.update({ hoursStatus: status });
+  }
+
+  /**
    * Sums `proposed_amount` over the worker's approved applications,
    * bucketed by event start month. Powers the "הכנסות חודשיות" card on
    * the employee profile.
