@@ -55,7 +55,7 @@ function authed(token: string): AuthedRequest {
 }
 
 /** Plain (unauthenticated) supertest agent against the shared app. */
-export function api(): request.SuperTest<request.Test> {
+export function api(): ReturnType<typeof request> {
   return request(getApp());
 }
 

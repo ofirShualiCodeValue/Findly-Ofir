@@ -23,5 +23,14 @@
     }
   },
   "include": ["src/**/*", "config.ts"],
-  "exclude": ["node_modules", "dist", "**/*.spec.ts", "**/*.test.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.spec.ts",
+    "**/*.test.ts",
+    "src/__e2e__/**/*",
+    "src/__tests__/**/*",
+    "jest.config.js",
+    "jest.e2e.config.js"
+  ]
 }
